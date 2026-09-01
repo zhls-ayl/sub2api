@@ -6,8 +6,9 @@
 
 | 项目 | 说明 |
 |------|------|
-| **上游仓库** | Wei-Shaw/sub2api |
-| **Fork 仓库** | bayma888/sub2api-bmai |
+| **自维护仓库** | zhls-ayl/sub2api（本仓库 `origin`） |
+| **跟随上游** | nianzs/sub2api（Kiro fork，本仓库 `upstream`） |
+| **原始上游** | Wei-Shaw/sub2api（本仓库 `weishaw`；nianzs 会定期合入） |
 | **技术栈** | Go 后端 (Ent ORM + Gin) + Vue3 前端 (pnpm) |
 | **数据库** | PostgreSQL 16 + Redis |
 | **包管理** | 后端: go modules, 前端: **pnpm**（不是 npm） |
@@ -263,8 +264,16 @@ psql -U sub2api -h 127.0.0.1 -d sub2api -f migration.sql
 
 ### Git 操作
 
+本仓库不再向上游提交 PR，在 `zhls-ayl/sub2api` 自维护，并定期合入 `nianzs/sub2api`。
+
+远程约定：
+
+- `origin` → `zhls-ayl/sub2api`（自维护版本）
+- `upstream` → `nianzs/sub2api`（跟随的 Kiro fork）
+- `weishaw` → `Wei-Shaw/sub2api`（原始上游，一般不直接合）
+
 ```bash
-# 同步上游
+# 同步上游到自维护 main（保留本地独有提交，冲突时手工解决）
 git fetch upstream
 git checkout main
 git merge upstream/main
@@ -273,9 +282,9 @@ git push origin main
 # 创建功能分支
 git checkout -b feature/xxx
 
-# Rebase 到最新 main
-git fetch upstream
-git rebase upstream/main
+# Rebase 到最新自维护 main
+git fetch origin
+git rebase origin/main
 ```
 
 ### 前端操作
@@ -340,7 +349,9 @@ sub2api-bmai/
 
 ## 七、参考资源
 
-- [上游仓库](https://github.com/Wei-Shaw/sub2api)
+- [自维护仓库](https://github.com/zhls-ayl/sub2api)
+- [跟随上游 nianzs/sub2api](https://github.com/nianzs/sub2api)
+- [原始上游 Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api)
 - [Ent 文档](https://entgo.io/docs/getting-started)
 - [Vue3 文档](https://vuejs.org/)
 - [pnpm 文档](https://pnpm.io/)
