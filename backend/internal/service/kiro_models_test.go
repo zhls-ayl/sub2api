@@ -30,7 +30,7 @@ func TestFetchKiroUpstreamModelsSendsProfileArnAndParsesIDs(t *testing.T) {
 		require.Equal(t, "/ListAvailableModels", r.URL.Path)
 		require.Equal(t, "AI_EDITOR", r.URL.Query().Get("origin"))
 		require.Equal(t, kiroBuilderIDProfileARN, r.URL.Query().Get("profileArn"))
-		require.Contains(t, r.Header.Get("User-Agent"), "KiroIDE-0.12.301-")
+		require.Contains(t, r.Header.Get("User-Agent"), "KiroIDE-1.0.437-")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"defaultModel": map[string]any{"modelId": "auto"},
 			"models": []map[string]any{

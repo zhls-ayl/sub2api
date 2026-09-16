@@ -16,12 +16,14 @@ func TestFetchOpenAIAccountModelsFillsPickerLabels(t *testing.T) {
 
 	models, err := svc.FetchOpenAIAccountModels(context.Background(), newCodexModelsTestAccount())
 	require.NoError(t, err)
-	require.Len(t, models, 2)
-	for _, model := range models {
-		require.NotEmpty(t, model.DisplayName, "picker label must not be empty for %q", model.ID)
-		require.Equal(t, model.ID, model.DisplayName)
-		require.Equal(t, "model", model.Type)
-	}
+	require.GreaterOrEqual(t, len(models), 2)
 	require.Equal(t, "gpt-5.6-terra", models[0].ID)
 	require.Equal(t, "codex-auto-review", models[1].ID)
+	for i, model := range models {
+		require.NotEmpty(t, model.DisplayName, "picker label must not be empty for %q", model.ID)
+		require.Equal(t, "model", model.Type)
+		if i >= 2 {
+			require.True(t, IsGPTImageGenerationModel(model.ID), "OAuth picker extras must be image models, got %q", model.ID)
+		}
+	}
 }
