@@ -112,6 +112,8 @@ func DetectModelPlatform(model string) (string, bool) {
 			return PlatformZhipu, true
 		case "deepseek":
 			return PlatformDeepseek, true
+		case "minimax":
+			return PlatformMiniMax, true
 		}
 		if rest != "" {
 			normalized = strings.TrimPrefix(rest, "models/")
@@ -122,6 +124,18 @@ func DetectModelPlatform(model string) (string, bool) {
 	case strings.HasPrefix(normalized, "anthropic.claude-"),
 		strings.HasPrefix(normalized, "claude-"):
 		return PlatformAnthropic, true
+	// gpt-image-* is advertised by both OpenAI and Adobe. Composite must not
+	// guess: explicit composite_model_routes or account ownership decide.
+	// This case must sit above the gpt- prefix or HasPrefix("gpt-image-2", "gpt-")
+	// would still classify it as OpenAI.
+	case normalized == "gpt-image" || strings.HasPrefix(normalized, "gpt-image-"):
+		return "", false
+	case strings.HasPrefix(normalized, "nano-banana"),
+		strings.HasPrefix(normalized, "flux-"),
+		strings.HasPrefix(normalized, "imagen-"),
+		strings.HasPrefix(normalized, "firefly-"),
+		strings.HasPrefix(normalized, "runway-gen4"):
+		return PlatformAdobe, true
 	case strings.HasPrefix(normalized, "gpt-"),
 		strings.HasPrefix(normalized, "chatgpt-"),
 		strings.HasPrefix(normalized, "codex-"),
@@ -129,7 +143,6 @@ func DetectModelPlatform(model string) (string, bool) {
 		strings.HasPrefix(normalized, "text-moderation-"),
 		strings.HasPrefix(normalized, "omni-moderation-"),
 		strings.HasPrefix(normalized, "dall-e-"),
-		strings.HasPrefix(normalized, "gpt-image-"),
 		strings.HasPrefix(normalized, "tts-"),
 		strings.HasPrefix(normalized, "whisper-"),
 		hasOpenAISeriesPrefix(normalized):
@@ -148,6 +161,11 @@ func DetectModelPlatform(model string) (string, bool) {
 		return PlatformZhipu, true
 	case strings.HasPrefix(normalized, "deepseek-"):
 		return PlatformDeepseek, true
+	case strings.HasPrefix(normalized, "minimax-"),
+		strings.HasPrefix(normalized, "abab5"),
+		strings.HasPrefix(normalized, "abab6"),
+		strings.HasPrefix(normalized, "abab7"):
+		return PlatformMiniMax, true
 	default:
 		return "", false
 	}
@@ -200,7 +218,7 @@ func (s *GatewayService) resolveCompositeRouteDecision(ctx context.Context, grou
 func isConcreteRequestPlatform(platform string) bool {
 	switch platform {
 	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformKiro, PlatformGrok,
-		PlatformKimi, PlatformZhipu, PlatformDeepseek:
+		PlatformAdobe, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
 		return true
 	default:
 		return false

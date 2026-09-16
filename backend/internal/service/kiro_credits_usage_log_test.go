@@ -49,7 +49,6 @@ func TestBuildRecordUsageLogPersistsPositiveKiroCredits(t *testing.T) {
 		1,
 		false,
 		&CostBreakdown{},
-		nil,
 	)
 
 	require.NotNil(t, log.KiroCredits)
@@ -81,7 +80,6 @@ func TestBuildRecordUsageLogOmitsZeroKiroCredits(t *testing.T) {
 		1,
 		false,
 		&CostBreakdown{},
-		nil,
 	)
 
 	require.Nil(t, log.KiroCredits)

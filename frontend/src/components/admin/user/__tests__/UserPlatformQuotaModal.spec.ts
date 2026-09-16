@@ -88,6 +88,7 @@ describe('UserPlatformQuotaModal', () => {
     expect(html).toContain('antigravity')
     expect(html).toContain('kiro')
     expect(html).toContain('grok')
+    expect(html).toContain('adobe')
   })
 
   it('已有数据正确填充 limit input', async () => {
@@ -99,13 +100,13 @@ describe('UserPlatformQuotaModal', () => {
     })
     const w = await mountAndOpen()
     const inputs = w.findAll('input[type=number]')
-    // 6 platforms × 3 windows = 18 inputs
-    expect(inputs.length).toBe(18)
+    // 7 platforms × 3 windows = 21 inputs
+    expect(inputs.length).toBe(21)
     // 第一个 input 是 anthropic.daily = 10
     expect((inputs[0].element as HTMLInputElement).value).toBe('10')
   })
 
-  it('保存提交完整 6 platform payload', async () => {
+  it('保存提交完整 7 platform payload', async () => {
     apiMocks.getPlatformQuotas.mockResolvedValueOnce({
       platform_quotas: [
         { platform: 'openai', daily_limit_usd: null, weekly_limit_usd: 20, monthly_limit_usd: null,
@@ -122,7 +123,7 @@ describe('UserPlatformQuotaModal', () => {
     expect(apiMocks.updatePlatformQuotas).toHaveBeenCalledTimes(1)
     const [uid, payload] = apiMocks.updatePlatformQuotas.mock.calls[0]
     expect(uid).toBe(99)
-    expect(payload).toHaveLength(6) // 6 platforms always submitted
+    expect(payload).toHaveLength(7) // 7 platforms always submitted
     const openai = payload.find((p: any) => p.platform === 'openai')
     expect(openai.weekly_limit_usd).toBe(20)
   })
@@ -178,7 +179,42 @@ describe('UserPlatformQuotaModal', () => {
     confirmSpy.mockRestore()
   })
 
+  // 只有已保存限额的平台在后端有配额记录，重置按钮才可用
+  const anthropicConfigured = {
+    platform_quotas: [
+      {
+        platform: 'anthropic',
+        daily_limit_usd: 10,
+        weekly_limit_usd: null,
+        monthly_limit_usd: null,
+        daily_usage_usd: 0,
+        weekly_usage_usd: 0,
+        monthly_usage_usd: 0,
+      },
+    ],
+  }
+
+  it('未配置限额的平台重置按钮禁用并提示不可用', async () => {
+    const w = await mountAndOpen()
+    const resetBtns = w.findAll('button').filter((b) => b.text() === '↻')
+    expect(resetBtns.length).toBe(21) // 7 平台 × 3 窗口
+    for (const b of resetBtns) {
+      expect((b.element as HTMLButtonElement).disabled).toBe(true)
+      expect(b.attributes('title')).toBe('admin.users.platformQuota.reset.unavailable')
+    }
+  })
+
+  it('已保存限额的平台重置按钮可用，其余仍禁用', async () => {
+    apiMocks.getPlatformQuotas.mockResolvedValue(anthropicConfigured)
+    const w = await mountAndOpen()
+    const resetBtns = w.findAll('button').filter((b) => b.text() === '↻')
+    const enabled = resetBtns.filter((b) => !(b.element as HTMLButtonElement).disabled)
+    expect(enabled.length).toBe(3) // anthropic 的 daily/weekly/monthly
+    expect(enabled[0].attributes('title')).toBe('admin.users.platformQuota.reset.button')
+  })
+
   it('重置按钮取消统一 ConfirmDialog 则不调用 API', async () => {
+    apiMocks.getPlatformQuotas.mockResolvedValue(anthropicConfigured)
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const w = await mountAndOpen()
     const resetBtns = w.findAll('button').filter((b) => b.text() === '↻')
@@ -195,6 +231,7 @@ describe('UserPlatformQuotaModal', () => {
   })
 
   it('重置按钮通过统一 ConfirmDialog 确认后调用 API', async () => {
+    apiMocks.getPlatformQuotas.mockResolvedValue(anthropicConfigured)
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const w = await mountAndOpen()
     const resetBtns = w.findAll('button').filter((b) => b.text() === '↻')

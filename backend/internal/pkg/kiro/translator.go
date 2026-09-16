@@ -113,8 +113,8 @@ type KiroRequestContext struct {
 	StopSequences            []string
 	MaxOutputTokens          int
 	// EstimatedInputTokens 是调用方预估的输入 token 数，用于非流式路径兜底：
-	// Kiro 上游只上报 credits(meteringEvent),不发 tokenUsage,解析结果里的
-	// InputTokens 恒为 0。流式路径通过独立的 inputTokens 参数种入初值,非流式
+	// 当 Kiro 上游没有 tokenUsage.uncachedInputTokens 时,解析结果里的
+	// InputTokens 为 0。流式路径通过独立的 inputTokens 参数种入初值,非流式
 	// 没有对应入口,不兜底会让响应体 usage.input_tokens 输出 0。
 	// 为 0 时不生效（保持原行为）。
 	EstimatedInputTokens int
@@ -540,8 +540,8 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
-	// Kiro 不上报 tokenUsage,解析结果的 InputTokens 恒为 0；缓存模拟生效时会
-	// 顺带填上（inputTokens 减去缓存部分），未生效时用调用方预估值兜底,
+	// 缓存模拟生效时会顺带填上 input tokens（inputTokens 减去缓存部分），
+	// 未生效且上游没有 tokenUsage.uncachedInputTokens 时用调用方预估值兜底,
 	// 避免响应体 usage.input_tokens 输出 0。放在 merge 之后,让缓存模拟的
 	// 更精确取值优先。
 	if usage.InputTokens == 0 && requestCtx.EstimatedInputTokens > 0 {
@@ -1331,10 +1331,8 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return nil, err
 	}
 	finalUsageMap := map[string]any{
-		"input_tokens":                usage.InputTokens,
-		"output_tokens":               usage.OutputTokens,
-		"cache_read_input_tokens":     usage.CacheReadInputTokens,
-		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+		"input_tokens":  usage.InputTokens,
+		"output_tokens": usage.OutputTokens,
 	}
 	if usage.KiroCredits > 0 {
 		finalUsageMap["_sub2api_kiro_credits"] = usage.KiroCredits
@@ -3290,19 +3288,10 @@ func stopSequencePotentialSuffix(text string, stopSequences []string) string {
 
 func buildKiroClaudeUsageMap(usage Usage) map[string]any {
 	usageMap := map[string]any{
-		"input_tokens":            usage.InputTokens,
-		"output_tokens":           usage.OutputTokens,
-		"cache_read_input_tokens": usage.CacheReadInputTokens,
+		"input_tokens":  usage.InputTokens,
+		"output_tokens": usage.OutputTokens,
 	}
-	if usage.CacheCreationInputTokens > 0 {
-		usageMap["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
-	}
-	if usage.CacheCreation5mInputTokens > 0 || usage.CacheCreation1hInputTokens > 0 {
-		usageMap["cache_creation"] = map[string]any{
-			"ephemeral_5m_input_tokens": usage.CacheCreation5mInputTokens,
-			"ephemeral_1h_input_tokens": usage.CacheCreation1hInputTokens,
-		}
-	}
+	addKiroCacheUsageFields(usageMap, usage)
 	return usageMap
 }
 
@@ -4324,9 +4313,8 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 		if value, ok := toInt(tokenUsage["totalTokens"]); ok {
 			usage.TotalTokens = value
 		}
-		if value, ok := toInt(tokenUsage["cacheReadInputTokens"]); ok {
-			usage.CacheReadInputTokens = value
-		}
+		// Kiro cache usage is reported only from local emulation. Ignore
+		// tokenUsage cache fields even if upstream includes them.
 		updateKiroCreditsFromMap(usage, tokenUsage)
 	}
 	updateKiroCreditsFromMap(usage, event)
@@ -4476,9 +4464,6 @@ func toPositiveFiniteFloat(value any) (float64, bool) {
 
 func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	if simulated == nil {
-		return base
-	}
-	if base.CacheReadInputTokens > 0 || base.CacheCreationInputTokens > 0 || base.CacheCreation5mInputTokens > 0 || base.CacheCreation1hInputTokens > 0 {
 		return base
 	}
 	base.InputTokens = simulated.InputTokens

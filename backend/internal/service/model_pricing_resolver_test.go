@@ -230,8 +230,8 @@ func newResolverWithPlatformChannel(t *testing.T, platform string, pricing []Cha
 			return map[int64]string{groupID: platform}, nil
 		},
 	}
-	cs := NewChannelService(repo, nil, nil, nil)
-	bs := NewBillingService(nil, nil)
+	cs := NewChannelService(repo, nil, nil, nil, nil)
+	bs := newTestBillingServiceForResolver()
 	return NewModelPricingResolver(cs, bs)
 }
 
@@ -616,7 +616,7 @@ func TestResolve_WithChannelOverride_CacheError(t *testing.T) {
 			return nil, errors.New("database unavailable")
 		},
 	}
-	cs := NewChannelService(repo, nil, nil, nil)
+	cs := NewChannelService(repo, nil, nil, nil, nil)
 	bs := newTestBillingServiceForResolver()
 	r := NewModelPricingResolver(cs, bs)
 

@@ -120,6 +120,19 @@ describe('MonitorQuotaView', () => {
     expect(error.attributes('title')).toBe(longError)
   })
 
+  // error 与 message 同源，必须走同一张本地化表，否则弹窗里中英混排。
+  it('localizes the backend config-error sentinels', () => {
+    const wrapper = mount(MonitorQuotaView, {
+      props: {
+        snapshot: makeSnapshot({ success: false, error: 'linked group has no accounts' }),
+      },
+    })
+
+    const error = wrapper.get('[data-testid="monitor-quota-error"]')
+    expect(error.text()).toBe('monitorCommon.quota.messages.groupNoAccounts')
+    expect(error.attributes('title')).toBe('monitorCommon.quota.messages.groupNoAccounts')
+  })
+
   // 组级聚合摘要：accounts_total > 0 才渲染，单账号快照不受影响。
   it('omits the accounts summary for single-account snapshots', () => {
     const wrapper = mount(MonitorQuotaView, {

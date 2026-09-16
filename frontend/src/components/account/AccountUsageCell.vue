@@ -134,6 +134,7 @@
           :utilization="usageInfo.seven_day.utilization"
           :resets-at="usageInfo.seven_day.resets_at"
           :window-stats="usageInfo.seven_day.window_stats"
+          :estimated-total-cost="openAISevenDayEstimatedTotalCost"
           :show-now-when-idle="true"
           color="emerald"
         />
@@ -430,7 +431,7 @@
     </template>
 
     <!-- CN providers (Kimi / Zhipu / DeepSeek): coding-plan quota or payg balance -->
-    <template v-else-if="account.platform === 'kimi' || account.platform === 'zhipu' || account.platform === 'deepseek'">
+    <template v-else-if="account.platform === 'kimi' || account.platform === 'zhipu' || account.platform === 'deepseek' || account.platform === 'minimax' || account.platform === 'opencode_go'">
       <!-- 挂在 CN 平台下的 Ollama Cloud 账号（资格由后端下发 eligible）：用量由
            Ollama 用量窗口负责。这类账号不是国产厂商订阅，CN 的额度/余额探测端点由
            base_url 衍生，对 ollama.com 会被后端出站 URL 白名单拒绝，渲染出来只会
@@ -650,6 +651,43 @@
       <div v-else class="text-xs text-gray-400">-</div>
     </template>
 
+    <!-- Adobe OAuth accounts: 展示 planCap + credits/balance 顶栏 -->
+    <template v-else-if="isAdobeUsageAccount">
+      <div v-if="loading" class="space-y-1.5">
+        <div class="h-4 w-24 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        <div class="h-1.5 w-32 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+      </div>
+      <div v-else-if="error" class="text-xs text-red-500">
+        {{ error }}
+      </div>
+      <div v-else-if="adobeUsageAvailable" class="space-y-2">
+        <div v-if="usageInfo?.adobe_plan_cap" class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span
+            class="inline-flex items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+          >
+            <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.usageWindow.adobePlanCap') }}</span>
+            <span>{{ usageInfo.adobe_plan_cap }}</span>
+          </span>
+        </div>
+        <div v-if="usageInfo?.adobe_credit" class="space-y-1">
+          <div class="flex items-baseline justify-between gap-2 text-[11px] text-gray-600 dark:text-gray-300">
+            <span class="font-medium tracking-[0.01em]">{{ t('admin.accounts.usageWindow.adobeCredits') }}</span>
+            <span class="font-semibold tabular-nums text-gray-700 dark:text-gray-200">{{ formatKiroAmount(usageInfo.adobe_credit.current_usage) }} / {{ formatKiroAmount(usageInfo.adobe_credit.usage_limit) }}</span>
+          </div>
+          <div class="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+            <div class="h-full rounded-full bg-adobe-500 transition-all" :style="{ width: `${adobeCreditPercent}%` }"></div>
+          </div>
+        </div>
+        <div v-if="adobeResetDisplay" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
+          <span class="inline-flex items-center gap-1">
+            <span class="text-gray-400 dark:text-gray-500">{{ t('admin.accounts.usageWindow.adobeReset') }}</span>
+            <span class="font-medium tabular-nums text-gray-600 dark:text-gray-300">{{ adobeResetDisplay }}</span>
+          </span>
+        </div>
+      </div>
+      <div v-else class="text-xs text-gray-400">-</div>
+    </template>
+
     <!-- Other accounts: no usage window -->
     <template v-else>
       <div class="text-xs text-gray-400">-</div>
@@ -817,12 +855,15 @@ const showUsageWindows = computed(() => {
   if (props.account.platform === 'kiro') {
     return props.account.type === 'oauth' || isKiroDirectApiKeyAccount(props.account)
   }
+  if (props.account.platform === 'adobe') return props.account.type === 'oauth'
   // CN providers: apikey 账号也有滚动用量窗口（coding plan）或余额（payg），
   // 由 CNProviderQuotaCell / CNProviderBalanceCell 自行探测与展示。
   if (
     props.account.platform === 'kimi' ||
     props.account.platform === 'zhipu' ||
-    props.account.platform === 'deepseek'
+    props.account.platform === 'deepseek' ||
+    props.account.platform === 'minimax' ||
+    props.account.platform === 'opencode_go'
   ) {
     return true
   }
@@ -847,6 +888,9 @@ const shouldFetchUsage = computed(() => {
     return props.account.type === 'oauth'
   }
   if (props.account.platform === 'openai') {
+    return props.account.type === 'oauth'
+  }
+  if (props.account.platform === 'adobe') {
     return props.account.type === 'oauth'
   }
   return false
@@ -881,6 +925,25 @@ const geminiUsageAvailable = computed(() => {
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
+})
+
+const openAISevenDayEstimatedTotalCost = computed(() => {
+  const sevenDay = usageInfo.value?.seven_day
+  const utilization = sevenDay?.utilization
+  const currentCost = sevenDay?.window_stats?.cost
+  if (
+    typeof utilization !== 'number' ||
+    typeof currentCost !== 'number' ||
+    !Number.isFinite(utilization) ||
+    !Number.isFinite(currentCost) ||
+    utilization <= 0 ||
+    currentCost <= 0
+  ) {
+    return null
+  }
+
+  const estimate = (currentCost * 100) / utilization
+  return Number.isFinite(estimate) && estimate > 0 ? estimate : null
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
@@ -958,6 +1021,7 @@ const antigravity3ImageUsageFromAPI = computed(() =>
 // Claude from API (all Claude model variants)
 const antigravityClaudeUsageFromAPI = computed(() =>
   getAntigravityUsageFromAPI([
+    'claude-fable-5-1',
     'claude-fable-5',
     'claude-sonnet-4-5', 'claude-opus-4-5-thinking',
     'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-6-thinking',
@@ -1453,15 +1517,19 @@ const isKiroUsageAccount = computed(() => {
     (props.account.type === 'oauth' || isKiroDirectApiKeyAccount(props.account))
 })
 
+const isAdobeUsageAccount = computed(() =>
+  props.account.platform === 'adobe' && props.account.type === 'oauth'
+)
+
 const defaultUsageSource = computed<'passive' | 'active' | undefined>(() => {
-  if (isAnthropicOAuthOrSetupToken.value || isKiroUsageAccount.value) {
+  if (isAnthropicOAuthOrSetupToken.value || isKiroUsageAccount.value || isAdobeUsageAccount.value) {
     return 'passive'
   }
   return undefined
 })
 
 const manualRefreshUsageSource = computed<'passive' | 'active' | undefined>(() => {
-  if (isKiroUsageAccount.value) {
+  if (isKiroUsageAccount.value || isAdobeUsageAccount.value) {
     return 'active'
   }
   return defaultUsageSource.value
@@ -1496,6 +1564,19 @@ const clampPercent = (value?: number | null) => {
 
 const kiroCreditPercent = computed(() => clampPercent(usageInfo.value?.kiro_credit?.percentage_used))
 const kiroBonusPercent = computed(() => clampPercent(usageInfo.value?.kiro_bonus?.percentage_used))
+
+// Adobe（Step 6）：与 Kiro 分开语义——Adobe 是每日重置，Kiro 是订阅到期，不能复用。
+const adobeCreditPercent = computed(() => clampPercent(usageInfo.value?.adobe_credit?.percentage_used))
+const adobeUsageAvailable = computed(() =>
+  !!(usageInfo.value?.adobe_credit || usageInfo.value?.adobe_plan_cap)
+)
+const adobeResetDisplay = computed(() => {
+  const raw = usageInfo.value?.adobe_credit_reset_at
+  if (!raw) return ''
+  const parsed = new Date(raw)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toLocaleString()
+})
 
 const formatKiroAmount = (value?: number | null) => {
   if (value == null || !Number.isFinite(value)) return '0'

@@ -17,9 +17,12 @@ export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'antigravity', label: 'Antigravity' },
   { value: 'kiro', label: 'Kiro' },
   { value: 'grok', label: 'Grok' },
+  { value: 'adobe', label: 'Adobe' },
   { value: 'kimi', label: 'Kimi' },
   { value: 'zhipu', label: 'Zhipu GLM' },
-  { value: 'deepseek', label: 'DeepSeek' }
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'minimax', label: 'MiniMax' },
+  { value: 'opencode_go', label: 'OpenCode' }
 ] as const satisfies readonly PlatformOption<AccountPlatform>[]
 
 /** Platforms that can own a group. */

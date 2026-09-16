@@ -17,8 +17,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adobe"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -66,6 +68,7 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	cfg                     *config.Config
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -194,6 +197,7 @@ type CheckMixedChannelRequest struct {
 // AccountWithConcurrency extends Account with real-time concurrency info
 type AccountWithConcurrency struct {
 	*dto.Account
+	simpleMode         bool                         `json:"-"`
 	CurrentConcurrency int                          `json:"current_concurrency"`
 	SchedulerScore     *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
 	SchedulerScores    []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
@@ -201,6 +205,123 @@ type AccountWithConcurrency struct {
 	CurrentWindowCost *float64 `json:"current_window_cost,omitempty"` // 当前窗口费用
 	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 当前活跃会话数
 	CurrentRPM        *int     `json:"current_rpm,omitempty"`         // 当前分钟 RPM 计数
+}
+
+// AccountListItemWithConcurrency is the compact account-list envelope used
+// for lite=1. It embeds dto.AccountListItem instead of the full dto.Account,
+// so groups/account_groups never appear in the list payload.
+type AccountListItemWithConcurrency struct {
+	*dto.AccountListItem
+	CurrentConcurrency int                          `json:"current_concurrency"`
+	SchedulerScore     *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
+	SchedulerScores    []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
+	CurrentWindowCost  *float64                     `json:"current_window_cost,omitempty"`
+	ActiveSessions     *int                         `json:"active_sessions,omitempty"`
+	CurrentRPM         *int                         `json:"current_rpm,omitempty"`
+}
+
+type simpleModeGroupReference struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Status   string `json:"status"`
+}
+
+type simpleModeAccountGroupReference struct {
+	AccountID int64                     `json:"account_id"`
+	GroupID   int64                     `json:"group_id"`
+	Priority  int                       `json:"priority"`
+	CreatedAt time.Time                 `json:"created_at"`
+	Group     *simpleModeGroupReference `json:"group,omitempty"`
+}
+
+func simpleModeGroupReferenceFromDTO(group *dto.Group) *simpleModeGroupReference {
+	if group == nil {
+		return nil
+	}
+	return &simpleModeGroupReference{ID: group.ID, Name: group.Name, Platform: group.Platform, Status: group.Status}
+}
+
+func simpleModeCompositeGroupIDs(account *dto.Account) map[int64]struct{} {
+	hidden := make(map[int64]struct{})
+	if account == nil {
+		return hidden
+	}
+	for _, group := range account.Groups {
+		if group != nil && group.Platform == service.PlatformComposite {
+			hidden[group.ID] = struct{}{}
+		}
+	}
+	for _, accountGroup := range account.AccountGroups {
+		if accountGroup.Group != nil && accountGroup.Group.Platform == service.PlatformComposite {
+			hidden[accountGroup.GroupID] = struct{}{}
+		}
+	}
+	return hidden
+}
+
+func filterSimpleModeGroupIDs(groupIDs []int64, hidden map[int64]struct{}) []int64 {
+	visible := make([]int64, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if _, ok := hidden[groupID]; !ok {
+			visible = append(visible, groupID)
+		}
+	}
+	return visible
+}
+
+func simpleModeCompositeServiceGroupIDs(account *service.Account) map[int64]struct{} {
+	hidden := make(map[int64]struct{})
+	if account == nil {
+		return hidden
+	}
+	for _, group := range account.Groups {
+		if group != nil && group.Platform == service.PlatformComposite {
+			hidden[group.ID] = struct{}{}
+		}
+	}
+	for _, accountGroup := range account.AccountGroups {
+		if accountGroup.Group != nil && accountGroup.Group.Platform == service.PlatformComposite {
+			hidden[accountGroup.GroupID] = struct{}{}
+		}
+	}
+	return hidden
+}
+
+func (a AccountWithConcurrency) MarshalJSON() ([]byte, error) {
+	type alias AccountWithConcurrency
+	if !a.simpleMode || a.Account == nil {
+		return json.Marshal(alias(a))
+	}
+	groups := make([]simpleModeGroupReference, 0, len(a.Groups))
+	compositeIDs := simpleModeCompositeGroupIDs(a.Account)
+	for _, group := range a.Groups {
+		if group != nil && group.Platform == service.PlatformComposite {
+			continue
+		}
+		if ref := simpleModeGroupReferenceFromDTO(group); ref != nil {
+			groups = append(groups, *ref)
+		}
+	}
+	accountGroups := make([]simpleModeAccountGroupReference, 0, len(a.AccountGroups))
+	for _, accountGroup := range a.AccountGroups {
+		if accountGroup.Group != nil && accountGroup.Group.Platform == service.PlatformComposite {
+			continue
+		}
+		if _, hidden := compositeIDs[accountGroup.GroupID]; hidden {
+			continue
+		}
+		accountGroups = append(accountGroups, simpleModeAccountGroupReference{
+			AccountID: accountGroup.AccountID, GroupID: accountGroup.GroupID, Priority: accountGroup.Priority,
+			CreatedAt: accountGroup.CreatedAt, Group: simpleModeGroupReferenceFromDTO(accountGroup.Group),
+		})
+	}
+	return json.Marshal(struct {
+		alias
+		GroupIDs      []int64                           `json:"group_ids,omitempty"`
+		Groups        []simpleModeGroupReference        `json:"groups"`
+		AccountGroups []simpleModeAccountGroupReference `json:"account_groups"`
+	}{alias: alias(a), GroupIDs: filterSimpleModeGroupIDs(a.GroupIDs, compositeIDs), Groups: groups, AccountGroups: accountGroups})
 }
 
 type AccountSchedulerScore struct {
@@ -227,12 +348,28 @@ func (h *AccountHandler) accountResponseFromService(account *service.Account) *d
 	return out
 }
 
+func (h *AccountHandler) accountListResponseFromService(account *service.Account) *dto.Account {
+	out := dto.AccountFromServiceShallow(account)
+	if out != nil && account != nil {
+		out.Proxy = dto.ProxyFromService(account.Proxy)
+	}
+	if h != nil && h.ollamaCloudUsage != nil && out != nil {
+		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
+	}
+	return out
+}
+
+func (h *AccountHandler) isSimpleMode() bool {
+	return h != nil && h.cfg != nil && h.cfg.RunMode == config.RunModeSimple
+}
+
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
 	if h.accountUsageService != nil {
 		h.accountUsageService.EnrichAccountWithKiroRuntimeState(ctx, account)
 	}
 	item := AccountWithConcurrency{
 		Account:            h.accountResponseFromService(account),
+		simpleMode:         h.isSimpleMode(),
 		CurrentConcurrency: 0,
 	}
 	if account == nil {
@@ -660,8 +797,16 @@ func (h *AccountHandler) List(c *gin.Context) {
 		if h.accountUsageService != nil {
 			h.accountUsageService.EnrichAccountWithKiroRuntimeState(c.Request.Context(), acc)
 		}
+		accountResponse := h.accountResponseFromService(acc)
+		if lite {
+			accountResponse = h.accountListResponseFromService(acc)
+			if h.isSimpleMode() {
+				accountResponse.GroupIDs = filterSimpleModeGroupIDs(accountResponse.GroupIDs, simpleModeCompositeServiceGroupIDs(acc))
+			}
+		}
 		item := AccountWithConcurrency{
-			Account:            h.accountResponseFromService(acc),
+			Account:            accountResponse,
+			simpleMode:         h.isSimpleMode(),
 			CurrentConcurrency: concurrencyCounts[acc.ID],
 			SchedulerScore:     schedulerScores[acc.ID],
 			SchedulerScores:    schedulerGroupScores[acc.ID],
@@ -693,7 +838,34 @@ func (h *AccountHandler) List(c *gin.Context) {
 
 	h.enrichShadowParents(c.Request.Context(), result)
 
-	etag := buildAccountsListETag(result, total, page, pageSize, platform, accountType, status, search, lite)
+	if lite {
+		compact := make([]AccountListItemWithConcurrency, len(result))
+		for i := range result {
+			item := result[i]
+			compact[i] = AccountListItemWithConcurrency{
+				AccountListItem:    dto.AccountListItemFromAccount(item.Account),
+				CurrentConcurrency: item.CurrentConcurrency,
+				SchedulerScore:     item.SchedulerScore,
+				SchedulerScores:    item.SchedulerScores,
+				CurrentWindowCost:  item.CurrentWindowCost,
+				ActiveSessions:     item.ActiveSessions,
+				CurrentRPM:         item.CurrentRPM,
+			}
+		}
+		etag := buildAccountsListETag(compact, total, page, pageSize, platform, accountType, status, search, true)
+		if etag != "" {
+			c.Header("ETag", etag)
+			c.Header("Vary", "If-None-Match")
+			if ifNoneMatchMatched(c.GetHeader("If-None-Match"), etag) {
+				c.Status(http.StatusNotModified)
+				return
+			}
+		}
+		response.Paginated(c, compact, total, page, pageSize)
+		return
+	}
+
+	etag := buildAccountsListETag(result, total, page, pageSize, platform, accountType, status, search, false)
 	if etag != "" {
 		c.Header("ETag", etag)
 		c.Header("Vary", "If-None-Match")
@@ -706,23 +878,23 @@ func (h *AccountHandler) List(c *gin.Context) {
 	response.Paginated(c, result, total, page, pageSize)
 }
 
-func buildAccountsListETag(
-	items []AccountWithConcurrency,
+func buildAccountsListETag[T any](
+	items []T,
 	total int64,
 	page, pageSize int,
 	platform, accountType, status, search string,
 	lite bool,
 ) string {
 	payload := struct {
-		Total       int64                    `json:"total"`
-		Page        int                      `json:"page"`
-		PageSize    int                      `json:"page_size"`
-		Platform    string                   `json:"platform"`
-		AccountType string                   `json:"type"`
-		Status      string                   `json:"status"`
-		Search      string                   `json:"search"`
-		Lite        bool                     `json:"lite"`
-		Items       []AccountWithConcurrency `json:"items"`
+		Total       int64  `json:"total"`
+		Page        int    `json:"page"`
+		PageSize    int    `json:"page_size"`
+		Platform    string `json:"platform"`
+		AccountType string `json:"type"`
+		Status      string `json:"status"`
+		Search      string `json:"search"`
+		Lite        bool   `json:"lite"`
+		Items       []T    `json:"items"`
 	}{
 		Total:       total,
 		Page:        page,
@@ -847,6 +1019,10 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	}
 	// base_rpm 输入校验：负值归零，超过 10000 截断
 	sanitizeExtraBaseRPM(req.Extra)
+	if err := service.ValidateUpstreamRequestIDHeaderExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
@@ -980,6 +1156,10 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	}
 	// base_rpm 输入校验：负值归零，超过 10000 截断
 	sanitizeExtraBaseRPM(req.Extra)
+	if err := service.ValidateUpstreamRequestIDHeaderExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
@@ -1393,6 +1573,7 @@ func (h *AccountHandler) Refresh(c *gin.Context) {
 
 	if warning == "missing_project_id_temporary" {
 		response.Success(c, gin.H{
+			"account": h.buildAccountResponseWithRuntime(c.Request.Context(), updatedAccount),
 			"message": "Token refreshed successfully, but project_id could not be retrieved (will retry automatically)",
 			"warning": "missing_project_id_temporary",
 		})
@@ -1448,6 +1629,10 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		return
 	}
 	if err := service.ValidateOpenAILongContextBillingExtra(existing.Platform, req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := service.ValidateUpstreamRequestIDHeaderExtra(req.Extra); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -1902,6 +2087,14 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 			return
 		}
 	}
+	groupIDs := make([]int64, 0)
+	for _, item := range req.Accounts {
+		groupIDs = append(groupIDs, item.GroupIDs...)
+	}
+	if err := h.adminService.ValidateAccountGroupBindings(c.Request.Context(), groupIDs); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	executeAdminIdempotentJSON(c, "admin.accounts.batch_create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		success := 0
@@ -1924,6 +2117,15 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 
 			// base_rpm 输入校验：负值归零，超过 10000 截断
 			sanitizeExtraBaseRPM(item.Extra)
+			if err := service.ValidateUpstreamRequestIDHeaderExtra(item.Extra); err != nil {
+				failed++
+				results = append(results, gin.H{
+					"name":    item.Name,
+					"success": false,
+					"error":   err.Error(),
+				})
+				continue
+			}
 
 			skipCheck := item.ConfirmMixedChannelRisk != nil && *item.ConfirmMixedChannelRisk
 
@@ -2118,6 +2320,10 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 	}
 	// base_rpm 输入校验：负值归零，超过 10000 截断
 	sanitizeExtraBaseRPM(req.Extra)
+	if err := service.ValidateUpstreamRequestIDHeaderExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
@@ -2586,6 +2792,31 @@ func (h *AccountHandler) SetSchedulable(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
+// mappedOpenAIModels 把账号的 model_mapping 键渲染成测试弹窗可用的模型条目，
+// 命中内置目录时沿用其展示名，未收录的自定义模型以模型 ID 作为展示名。
+func mappedOpenAIModels(mapping map[string]string) []openai.Model {
+	models := make([]openai.Model, 0, len(mapping))
+	for requestedModel := range mapping {
+		var found bool
+		for _, dm := range openai.DefaultModels {
+			if dm.ID == requestedModel {
+				models = append(models, dm)
+				found = true
+				break
+			}
+		}
+		if !found {
+			models = append(models, openai.Model{
+				ID:          requestedModel,
+				Object:      "model",
+				Type:        "model",
+				DisplayName: requestedModel,
+			})
+		}
+	}
+	return models
+}
+
 // GetAvailableModels handles getting available models for an account
 // GET /api/v1/admin/accounts/:id/models
 func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
@@ -2603,39 +2834,26 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	// Handle OpenAI accounts
 	if account.IsOpenAI() {
-		// OpenAI 自动透传会绕过常规模型改写，测试/模型列表也应回落到默认模型集。
-		if account.IsOpenAIPassthroughEnabled() {
-			response.Success(c, openai.DefaultModels)
-			return
-		}
-
-		mapping := account.GetModelMapping()
-		if len(mapping) == 0 {
-			response.Success(c, openai.DefaultModels)
-			return
-		}
-
-		// Return mapped models
-		var models []openai.Model
-		for requestedModel := range mapping {
-			var found bool
-			for _, dm := range openai.DefaultModels {
-				if dm.ID == requestedModel {
-					models = append(models, dm)
-					found = true
-					break
-				}
-			}
-			if !found {
-				models = append(models, openai.Model{
-					ID:          requestedModel,
-					Object:      "model",
-					Type:        "model",
-					DisplayName: requestedModel,
-				})
+		// 账号显式配置的 model_mapping 优先：测试弹窗要反映这个账号实际会服务的模型集合。
+		// OpenAI 自动透传绕过常规模型改写，mapping 不生效，因此跳过这一步。
+		if !account.IsOpenAIPassthroughEnabled() {
+			if models := mappedOpenAIModels(account.GetModelMapping()); len(models) > 0 {
+				response.Success(c, models)
+				return
 			}
 		}
-		response.Success(c, models)
+
+		// 未配置 mapping（或透传）时改用账号维度的上游实时目录，比硬编码默认集更贴近
+		// 账号真实能力。发现失败或目录为空（上游可能无错返回 {"models":[]}）时继续回落，
+		// 避免测试弹窗渲染出空的模型选择器。
+		if h.accountTestService != nil {
+			if models, fetchErr := h.accountTestService.FetchOpenAIAccountModels(c.Request.Context(), account); fetchErr == nil && len(models) > 0 {
+				response.Success(c, models)
+				return
+			}
+		}
+
+		response.Success(c, openai.DefaultModels)
 		return
 	}
 
@@ -2699,6 +2917,16 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		}
 
 		response.Success(c, buildMappedKiroModels(mapping))
+		return
+	}
+
+	// Handle Adobe accounts
+	//
+	// Adobe 账号一律是 oauth，改前会落到本函数结尾的 Claude 兜底分支返回 claude.DefaultModels
+	// ——测试弹窗因此显示一堆 Sonnet/Opus。GetModelMapping 对 Adobe 在未显式配置时会自动
+	// 回落到 DefaultAdobeModelMapping，所以这一条同时覆盖默认账号与自定义映射的账号。
+	if account.Platform == service.PlatformAdobe {
+		response.Success(c, buildAdobeTestModels(account.GetModelMapping()))
 		return
 	}
 
@@ -2791,6 +3019,48 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	}
 
 	response.Success(c, models)
+}
+
+// buildAdobeTestModels 把账号的 model_mapping 键渲染成测试弹窗可用的模型条目。
+//
+// 顺序是刻意的：先按 adobe.ImageModelIDs() 的对外展示序输出，再把运维自定义的额外别名
+// 按字典序追加。前端默认选中第一项，顺序不稳会让默认模型每次刷新都变。
+//
+// DisplayName 直接用 id：Adobe 的对外名本身可读（gpt-image-2 / nano-banana-pro / flux-pro），
+// 不值得再维护一张标签表。
+func buildAdobeTestModels(mapping map[string]string) []adobe.Model {
+	models := make([]adobe.Model, 0, len(mapping))
+	emitted := make(map[string]struct{}, len(mapping))
+
+	// 对外清单里的模型给人类可读展示名（"gpt-image-2" → "GPT Image 2"），
+	// 与 OpenAI/Gemini 的选择器观感一致。
+	for _, id := range adobe.ImageModelIDs() {
+		if _, ok := mapping[id]; !ok {
+			continue
+		}
+		emitted[id] = struct{}{}
+		displayName := id
+		if label, ok := adobe.DisplayLabel(id); ok {
+			displayName = label
+		}
+		models = append(models, adobe.Model{ID: id, Type: "model", DisplayName: displayName})
+	}
+
+	extras := make([]string, 0, len(mapping))
+	for id := range mapping {
+		if _, ok := emitted[id]; ok {
+			continue
+		}
+		extras = append(extras, id)
+	}
+	sort.Strings(extras)
+	// extras 刻意保留裸 id：默认映射里的 gpt-image / gpt-image-1 / gpt-image-1-mini
+	// 都落同一个族，套 label 会出现三行一模一样的「GPT Image 2」；
+	// 运维自定义的别名也该显示他自己写的那个名字。
+	for _, id := range extras {
+		models = append(models, adobe.Model{ID: id, Type: "model", DisplayName: id})
+	}
+	return models
 }
 
 func buildMappedKiroModels(mapping map[string]string) []kiropkg.Model {
@@ -3133,6 +3403,12 @@ func (h *AccountHandler) GetAntigravityDefaultModelMapping(c *gin.Context) {
 // GET /api/v1/admin/accounts/kiro/default-model-mapping
 func (h *AccountHandler) GetKiroDefaultModelMapping(c *gin.Context) {
 	response.Success(c, domain.DefaultKiroModelMapping)
+}
+
+// GetAdobeDefaultModelMapping 获取 Adobe 平台的默认模型映射
+// GET /api/v1/admin/accounts/adobe/default-model-mapping
+func (h *AccountHandler) GetAdobeDefaultModelMapping(c *gin.Context) {
+	response.Success(c, domain.DefaultAdobeModelMapping)
 }
 
 // sanitizeExtraBaseRPM 对 extra map 中的 base_rpm 值进行范围校验和归一化。

@@ -165,6 +165,9 @@ const labelClass = computed(() => {
   if (props.platform === 'grok') {
     return `${base} bg-zinc-300/70 text-zinc-800 dark:bg-zinc-700/60 dark:text-zinc-200`
   }
+  if (props.platform === 'adobe') {
+    return `${base} bg-adobe-200/60 text-adobe-800 dark:bg-adobe-800/40 dark:text-adobe-300`
+  }
   if (props.platform === 'kimi') {
     return `${base} bg-pink-200/60 text-pink-800 dark:bg-pink-800/40 dark:text-pink-300`
   }
@@ -173,6 +176,9 @@ const labelClass = computed(() => {
   }
   if (props.platform === 'deepseek') {
     return `${base} bg-teal-200/60 text-teal-800 dark:bg-teal-800/40 dark:text-teal-300`
+  }
+  if (props.platform === 'minimax') {
+    return `${base} bg-rose-200/60 text-rose-800 dark:bg-rose-800/40 dark:text-rose-300`
   }
   if (props.platform === 'composite') {
     return `${base} bg-cyan-200/70 text-cyan-900 dark:bg-cyan-900/50 dark:text-cyan-300`
@@ -217,6 +223,11 @@ const badgeClass = computed(() => {
       ? 'bg-zinc-200 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-100'
       : 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200'
   }
+  if (props.platform === 'adobe') {
+    return isSubscription.value
+      ? 'bg-adobe-100 text-adobe-700 dark:bg-adobe-900/30 dark:text-adobe-400'
+      : 'bg-adobe-50 text-adobe-700 dark:bg-adobe-900/20 dark:text-adobe-400'
+  }
   if (props.platform === 'kimi') {
     return isSubscription.value
       ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-400'
@@ -231,6 +242,11 @@ const badgeClass = computed(() => {
     return isSubscription.value
       ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
       : 'bg-teal-50 text-teal-700 dark:bg-teal-900/20 dark:text-teal-400'
+  }
+  if (props.platform === 'minimax') {
+    return isSubscription.value
+      ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+      : 'bg-rose-50 text-rose-700 dark:bg-rose-900/20 dark:text-rose-400'
   }
   if (props.platform === 'composite') {
     return isSubscription.value

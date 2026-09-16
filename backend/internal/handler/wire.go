@@ -111,13 +111,15 @@ func ProvideGatewayHandler(
 	promptRuleService *service.PromptRuleService,
 	contentModerationService *service.ContentModerationService,
 	userMsgQueueService *service.UserMessageQueueService,
+	adobeImageService *service.AdobeImageService,
 	cfg *config.Config,
 	settingService *service.SettingService,
 	coordinator *securityaudit.Coordinator,
 ) *GatewayHandler {
 	h := NewGatewayHandler(gatewayService, openAIGatewayService, geminiCompatService, antigravityGatewayService,
 		userService, concurrencyService, billingCacheService, usageService, apiKeyService, usageRecordWorkerPool,
-		errorPassthroughService, promptRuleService, contentModerationService, userMsgQueueService, cfg, settingService)
+		errorPassthroughService, promptRuleService, contentModerationService, userMsgQueueService,
+		adobeImageService, cfg, settingService)
 	h.securityAuditCoordinator = coordinator
 	return h
 }
@@ -256,7 +258,7 @@ var ProviderSet = wire.NewSet(
 	// Admin handlers
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
-	admin.NewGroupHandler,
+	admin.NewGroupHandlerWithConfig,
 	admin.ProvideAccountHandler,
 	admin.NewAnnouncementHandler,
 	admin.NewDataManagementHandler,

@@ -7,8 +7,10 @@ const openaiModels = [
   // GPT-5.2 系列
   'gpt-5.2', 'gpt-5.2-2025-12-11', 'gpt-5.2-chat-latest',
   'gpt-5.2-pro', 'gpt-5.2-pro-2025-12-11',
-  // GPT-5.6 系列
+	// GPT-5.6 系列
   'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+  // GPT-6 系列
+  'gpt-6', 'gpt-6-astra',
   // GPT-5.5 系列
   'gpt-5.5',
   // GPT-5.4 系列
@@ -17,7 +19,7 @@ const openaiModels = [
   'gpt-5.3-codex-spark', 'codex-auto-review',
   'gpt-4o-audio-preview', 'gpt-4o-realtime-preview',
   // GPT Image 系列
-  'gpt-image-1', 'gpt-image-1.5', 'gpt-image-2'
+  'gpt-image-1', 'gpt-image-1.5', 'gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'
 ]
 
 // Anthropic Claude
@@ -43,6 +45,7 @@ export const claudeModels = [
   'claude-sonnet-4-6-thinking',
   'claude-sonnet-4-6',
   'claude-sonnet-5',
+  'claude-fable-5-1',
   'claude-fable-5',
   'claude-2.1', 'claude-2.0', 'claude-instant-1.2'
 ]
@@ -65,6 +68,7 @@ const geminiModels = [
 // 基于官方 API 返回的模型列表，只支持 Claude 4.5+ 和 Gemini 2.5+
 const antigravityModels = [
   // Claude 4.5+ 系列
+  'claude-fable-5-1',
   'claude-fable-5',
   'claude-opus-4-6',
   'claude-opus-4-6-thinking',
@@ -93,6 +97,28 @@ const antigravityModels = [
   // 其他
   'gpt-oss-120b-medium',
   'tab_flash_lite_preview'
+]
+
+// Adobe Firefly 图像模型（族级 id，与后端 internal/pkg/adobe 的
+// ImageFamilyModelIDs 保持一致）。分辨率与宽高比由请求的 size 推导，
+// 故这里不列 5×3×N 的全组合。
+// Step 8：干净外部名。与后端 adobe.ImageModelIDs() 一致。
+// 内部族 id（firefly-*）是路由用的，用户面看不到。
+const adobeModels = [
+  'gpt-image-2',
+  'gpt-image-1.5',
+  // sunburst 是 UI 展示名；后端把它映到上游 modelVersion=gpt-image-2.5-prism。
+  'gpt-image-2.5-flare',
+  'gpt-image-2.5-sunburst',
+  'nano-banana-pro',
+  'nano-banana',
+  'nano-banana2',
+  'flux-pro',
+  'flux-ultra',
+  'imagen-4',
+  'imagen-4-fast',
+  'gpt-4o-image',
+  'runway-gen4-image'
 ]
 
 const kiroModels = [
@@ -124,7 +150,10 @@ const kiroModels = [
 const zhipuModels = [
   'glm-4', 'glm-4v', 'glm-4-plus', 'glm-4-0520',
   'glm-4-air', 'glm-4-airx', 'glm-4-long', 'glm-4-flash',
-  'glm-4v-plus', 'glm-4.5', 'glm-4.6',
+  'glm-4v-plus', 'glm-4.5', 'glm-4.5-x', 'glm-4.5-air', 'glm-4.5-flash',
+  'glm-4.6', 'glm-4.7', 'glm-4.7-flash', 'glm-4.7-flashx',
+  'glm-5', 'glm-5-turbo', 'glm-5.1', 'glm-5.2',
+  'glm-5.3', 'glm-5.3-flash',
   'glm-3-turbo', 'glm-4-alltools',
   'chatglm_turbo', 'chatglm_pro', 'chatglm_std', 'chatglm_lite',
   'cogview-3', 'cogvideo'
@@ -143,7 +172,7 @@ const qwenModels = [
 
 // DeepSeek
 const deepseekModels = [
-  'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
+  'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-flash',
   'deepseek-coder',
   'deepseek-v3', 'deepseek-v3-0324',
   'deepseek-r1', 'deepseek-r1-0528',
@@ -233,6 +262,14 @@ const doubaoModels = [
 
 // MiniMax
 const minimaxModels = [
+  'MiniMax-M3',
+  'MiniMax-M2.7',
+  'MiniMax-M2.7-highspeed',
+  'MiniMax-M2.5',
+  'MiniMax-M2.5-highspeed',
+  'MiniMax-M2.1',
+  'MiniMax-M2.1-highspeed',
+  'MiniMax-M2',
   'abab6.5-chat', 'abab6.5s-chat', 'abab6.5s-chat-pro',
   'abab6-chat',
   'abab5.5-chat', 'abab5.5s-chat'
@@ -298,6 +335,7 @@ export const allModels = allModelsList.map(m => ({ value: m, label: m }))
 // =====================
 
 const anthropicPresetMappings = [
+  { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'claude-fable-5-1', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
   { label: 'Sonnet 4', from: 'claude-sonnet-4-20250514', to: 'claude-sonnet-4-20250514', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
@@ -321,10 +359,12 @@ const openaiPresetMappings = [
   { label: 'o3', from: 'o3', to: 'o3', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
   { label: 'GPT-5.3 Codex Spark', from: 'gpt-5.3-codex-spark', to: 'gpt-5.3-codex-spark', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
   { label: 'GPT-5.2', from: 'gpt-5.2', to: 'gpt-5.2', color: 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-400' },
+  { label: 'GPT-6', from: 'gpt-6', to: 'gpt-6', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
   { label: 'GPT-5.6', from: 'gpt-5.6', to: 'gpt-5.6', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   { label: 'GPT-5.6 Sol', from: 'gpt-5.6-sol', to: 'gpt-5.6-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: 'GPT-5.6 Terra', from: 'gpt-5.6-terra', to: 'gpt-5.6-terra', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
   { label: 'GPT-5.6 Luna', from: 'gpt-5.6-luna', to: 'gpt-5.6-luna', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: 'GPT-6 Astra', from: 'gpt-6-astra', to: 'gpt-6-astra', color: 'bg-fuchsia-100 text-fuchsia-700 hover:bg-fuchsia-200 dark:bg-fuchsia-900/30 dark:text-fuchsia-400' },
   { label: 'GPT-5.5', from: 'gpt-5.5', to: 'gpt-5.5', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   { label: 'GPT-5.4', from: 'gpt-5.4', to: 'gpt-5.4', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Haiku→5.4', from: 'claude-haiku-4-5-20251001', to: 'gpt-5.4', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
@@ -362,6 +402,7 @@ const grokPresetMappings = [
 const antigravityPresetMappings = [
   // Claude 通配符映射
   { label: 'Claude→Sonnet', from: 'claude-*', to: 'claude-sonnet-4-5', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
+  { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'claude-fable-5-1', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Sonnet→Sonnet', from: 'claude-sonnet-*', to: 'claude-sonnet-4-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
   { label: 'Opus→Opus', from: 'claude-opus-*', to: 'claude-opus-4-6-thinking', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
@@ -396,6 +437,30 @@ const antigravityPresetMappings = [
   { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4-8', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' }
 ]
 
+// Adobe 预设映射（与后端 domain.DefaultAdobeModelMapping 保持一致）。
+// Step 8：清除所有 firefly-* 左侧的直通条目——用户面永远看不到内部族 id。
+const adobePresetMappings = [
+  { label: 'GPT Image 2', from: 'gpt-image-2', to: 'firefly-gpt-image-2', color: 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300' },
+  { label: 'GPT Image 1.5', from: 'gpt-image-1.5', to: 'firefly-gpt-image-1.5', color: 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300' },
+  // sunburst 是 UI 展示名（对应上游 modelVersion=gpt-image-2.5-prism）。
+  { label: 'GPT Image 2.5 Sunburst', from: 'gpt-image-2.5-sunburst', to: 'firefly-gpt-image-2-5-prism', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
+  { label: 'GPT Image 2.5 Prism', from: 'gpt-image-2.5-prism', to: 'firefly-gpt-image-2-5-prism', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
+  { label: 'GPT Image 2.5 Flare', from: 'gpt-image-2.5-flare', to: 'firefly-gpt-image-2-5-flare', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
+  // 更早的 gpt-image 名字：Adobe 侧没有对应版本，一律落 2（与后端默认表一致）
+  { label: 'GPT Image', from: 'gpt-image', to: 'firefly-gpt-image-2', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
+  { label: 'GPT Image 1', from: 'gpt-image-1', to: 'firefly-gpt-image-2', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
+  { label: 'GPT Image 1 Mini', from: 'gpt-image-1-mini', to: 'firefly-gpt-image-2', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
+  { label: 'Nano Banana Pro', from: 'nano-banana-pro', to: 'firefly-nano-banana-pro', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300' },
+  { label: 'Nano Banana 2', from: 'nano-banana2', to: 'firefly-nano-banana2', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300' },
+  { label: 'Nano Banana', from: 'nano-banana', to: 'firefly-nano-banana', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300' },
+  { label: 'FLUX Pro', from: 'flux-pro', to: 'firefly-flux-pro', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' },
+  { label: 'FLUX Ultra', from: 'flux-ultra', to: 'firefly-flux-ultra', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' },
+  { label: 'Imagen 4', from: 'imagen-4', to: 'firefly-imagen-4', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' },
+  { label: 'Imagen 4 Fast', from: 'imagen-4-fast', to: 'firefly-imagen-4-fast', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' },
+  { label: 'GPT-4o Image', from: 'gpt-4o-image', to: 'firefly-gpt-4o-image', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-900/30 dark:text-slate-300' },
+  { label: 'Runway Gen-4', from: 'runway-gen4-image', to: 'firefly-runway-gen4-image', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-300' }
+]
+
 const kiroPresetMappings = [
   { label: 'GPT-5.6 Sol', from: 'gpt-5.6-sol', to: 'gpt-5.6-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'GPT-5.6 Terra', from: 'gpt-5.6-terra', to: 'gpt-5.6-terra', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-300' },
@@ -423,6 +488,7 @@ const kiroPresetMappings = [
 
 // Bedrock 预设映射（与后端 DefaultBedrockModelMapping 保持一致）
 const bedrockPresetMappings = [
+  { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'anthropic.claude-fable-5-1', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Fable 5', from: 'claude-fable-5', to: 'anthropic.claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'us.anthropic.claude-opus-4-6-v1', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
   { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'us.anthropic.claude-opus-4-7-v1', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
@@ -493,6 +559,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'gemini': return geminiModels
     case 'antigravity': return antigravityModels
     case 'kiro': return kiroModels
+    case 'adobe': return adobeModels
     case 'zhipu': return zhipuModels
     case 'qwen': return qwenModels
     case 'deepseek': return deepseekModels
@@ -504,6 +571,18 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'yi': return yiModels
     case 'moonshot':
     case 'kimi': return moonshotModels
+    case 'opencode_go': return [
+      'grok-4.6', 'gpt-5.6-luna',
+      'glm-5.3-flash', 'glm-5.3', 'glm-5.2', 'glm-5.1',
+      'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6',
+      'longcat-2.0',
+      'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
+      'mimo-v2.5', 'mimo-v2.5-pro',
+      'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
+      'muse-spark-1.3-contributor', 'muse-spark-1.2-contributor',
+      'qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-plus',
+      'hy4-preview', 'hy3', 'omen-alpha'
+    ]
     case 'doubao': return doubaoModels
     case 'minimax': return minimaxModels
     case 'baidu': return baiduModels
@@ -521,6 +600,7 @@ export function getPresetMappingsByPlatform(platform: string) {
   if (platform === 'grok' || platform === 'xai') return grokPresetMappings
   if (platform === 'antigravity') return antigravityPresetMappings
   if (platform === 'kiro') return kiroPresetMappings
+  if (platform === 'adobe') return adobePresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings
   return anthropicPresetMappings
 }

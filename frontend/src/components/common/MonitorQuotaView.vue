@@ -45,7 +45,7 @@
       </span>
     </div>
 
-    <div v-if="!accountsOnly && !snapshot.success" class="truncate text-[10px] text-red-600 dark:text-red-400" :title="snapshot.error" data-testid="monitor-quota-error">
+    <div v-if="!accountsOnly && !snapshot.success" class="truncate text-[10px] text-red-600 dark:text-red-400" :title="localizedError" data-testid="monitor-quota-error">
       {{ truncatedError }}
     </div>
   </div>
@@ -56,6 +56,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { MonitorQuotaSnapshot, MonitorQuotaTier } from '@/api/admin/channelMonitor'
 import UsageProgressBar from '@/components/account/UsageProgressBar.vue'
+import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
 
 /**
  * 配额快照渲染（管理端监控列表/运行结果 + 用户端监控卡片共用）。
@@ -71,6 +72,7 @@ const props = defineProps<{
 }>()
 
 const { t, te } = useI18n()
+const { localizeMonitorMessage } = useChannelMonitorFormat()
 
 type TierColor = 'indigo' | 'emerald' | 'purple' | 'amber'
 
@@ -172,8 +174,13 @@ const balanceRows = computed(() => {
   return []
 })
 
+// error 与 message 同源（后端固定英文串），走同一张本地化表；未识别的串原样透出。
+const localizedError = computed(
+  () => localizeMonitorMessage(props.snapshot?.error) || t('monitorCommon.quota.unavailable'),
+)
+
 const truncatedError = computed(() => {
-  const error = props.snapshot?.error || t('monitorCommon.quota.unavailable')
+  const error = localizedError.value
   return error.length > 48 ? `${error.slice(0, 48)}…` : error
 })
 </script>

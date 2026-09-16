@@ -133,6 +133,7 @@ func TestNewGatewayServiceWiresCompositeModelOwnershipResolver(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil, // adobeTokenProvider
 		nil,
 		nil,
 		nil,
@@ -164,6 +165,9 @@ func TestDetectModelPlatform(t *testing.T) {
 		{name: "claude", model: "claude-sonnet-4-5", platform: PlatformAnthropic, ok: true},
 		{name: "anthropic prefix", model: "anthropic/claude-opus-4-5", platform: PlatformAnthropic, ok: true},
 		{name: "gpt", model: "gpt-5.1", platform: PlatformOpenAI, ok: true},
+		{name: "gpt-image is not inferred", model: "gpt-image-2", ok: false},
+		{name: "dall-e stays openai", model: "dall-e-3", platform: PlatformOpenAI, ok: true},
+		{name: "nano-banana adobe", model: "nano-banana-pro", platform: PlatformAdobe, ok: true},
 		{name: "o series", model: "o3-mini", platform: PlatformOpenAI, ok: true},
 		{name: "embedding", model: "text-embedding-3-large", platform: PlatformOpenAI, ok: true},
 		{name: "gemini", model: "gemini-3-pro", platform: PlatformGemini, ok: true},
@@ -178,6 +182,11 @@ func TestDetectModelPlatform(t *testing.T) {
 		{name: "moonshot prefix", model: "moonshot/moonshot-v1-32k", platform: PlatformKimi, ok: true},
 		{name: "zhipu", model: "glm-5.2", platform: PlatformZhipu, ok: true},
 		{name: "deepseek", model: "deepseek-v4-pro", platform: PlatformDeepseek, ok: true},
+		{name: "minimax", model: "MiniMax-M3", platform: PlatformMiniMax, ok: true},
+		{name: "minimax prefix", model: "minimax/MiniMax-M2.5", platform: PlatformMiniMax, ok: true},
+		{name: "abab legacy", model: "abab6.5-chat", platform: PlatformMiniMax, ok: true},
+		{name: "abab7 legacy", model: "abab7-chat-preview", platform: PlatformMiniMax, ok: true},
+		{name: "abab unrelated namespace", model: "abab-other", ok: false},
 		{name: "unknown k3 alias", model: "k3-preview", ok: false},
 		{name: "unknown", model: "llama-4-maverick", ok: false},
 	}
@@ -212,14 +221,11 @@ func TestCompositeGroupSchedulerHasAllCanonicalPlatformBuckets(t *testing.T) {
 	for platform := range seen {
 		platforms = append(platforms, platform)
 	}
-	require.ElementsMatch(t,
-		[]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformKiro, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek},
-		platforms,
-	)
+	require.ElementsMatch(t, AllowedQuotaPlatforms, platforms)
 }
 
 func TestCompositeConcretePlatformsIncludeCNProviders(t *testing.T) {
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo} {
 		require.True(t, isConcreteRequestPlatform(platform))
 		require.True(t, canCopyAccountsFromGroupPlatform(PlatformComposite, platform))
 	}

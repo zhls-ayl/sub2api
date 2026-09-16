@@ -8,9 +8,12 @@ const concretePlatforms = [
   'antigravity',
   'kiro',
   'grok',
+  'adobe',
   'kimi',
   'zhipu',
-  'deepseek'
+  'deepseek',
+  'minimax',
+  'opencode_go'
 ]
 
 describe('platform option catalogs', () => {

@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 22 // v22: Kiro cache fields + group profit control + search/audio/video_model_prices billing fields + long-context + model pricing + CN providers
+const apiKeyAuthSnapshotVersion = 25 // v25: v24 (Kiro cache fields + group profit control + search/audio/video_model_prices billing fields + long-context + model pricing + CN providers + group force/free_openai_fast + codex_models_manifest_config) + group model_allowlist field (renamed from models_list_config, enforcing semantics)
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -424,11 +424,15 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			SupportedModelScopes:            groupForSnapshot.SupportedModelScopes,
 			AllowMessagesDispatch:           groupForSnapshot.AllowMessagesDispatch,
 			AllowLive:                       groupForSnapshot.AllowLive,
+			ForceOpenAIFast:                 groupForSnapshot.ForceOpenAIFast,
+			FreeOpenAIFast:                  groupForSnapshot.FreeOpenAIFast,
 			DefaultMappedModel:              groupForSnapshot.DefaultMappedModel,
 			MessagesDispatchModelConfig:     groupForSnapshot.MessagesDispatchModelConfig,
-			ModelsListConfig:                groupForSnapshot.ModelsListConfig,
+			ModelAllowlist:                  groupForSnapshot.ModelAllowlist,
+			CodexModelsManifestConfig:       groupForSnapshot.CodexModelsManifestConfig,
 			RPMLimit:                        groupForSnapshot.RPMLimit,
 			MaxReasoningEffort:              groupForSnapshot.MaxReasoningEffort,
+			MaxReasoningEffortOverLimit:     groupForSnapshot.MaxReasoningEffortOverLimit,
 			ReasoningEffortMappings:         groupForSnapshot.ReasoningEffortMappings,
 			KiroCacheEmulationEnabled:       groupForSnapshot.EffectiveKiroCacheEmulationEnabled(),
 			KiroAutoStickyEnabled:           groupForSnapshot.EffectiveKiroAutoStickyEnabled(),
@@ -530,11 +534,15 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			SupportedModelScopes:            snapshot.Group.SupportedModelScopes,
 			AllowMessagesDispatch:           snapshot.Group.AllowMessagesDispatch,
 			AllowLive:                       snapshot.Group.AllowLive,
+			ForceOpenAIFast:                 snapshot.Group.ForceOpenAIFast,
+			FreeOpenAIFast:                  snapshot.Group.FreeOpenAIFast,
 			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
-			ModelsListConfig:                snapshot.Group.ModelsListConfig,
+			ModelAllowlist:                  snapshot.Group.ModelAllowlist,
+			CodexModelsManifestConfig:       snapshot.Group.CodexModelsManifestConfig,
 			RPMLimit:                        snapshot.Group.RPMLimit,
 			MaxReasoningEffort:              snapshot.Group.MaxReasoningEffort,
+			MaxReasoningEffortOverLimit:     snapshot.Group.MaxReasoningEffortOverLimit,
 			ReasoningEffortMappings:         snapshot.Group.ReasoningEffortMappings,
 			KiroCacheEmulationEnabled:       snapshot.Group.KiroCacheEmulationEnabled,
 			KiroAutoStickyEnabled:           snapshot.Group.KiroAutoStickyEnabled,

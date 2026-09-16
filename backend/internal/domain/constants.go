@@ -24,11 +24,18 @@ const (
 	PlatformAntigravity = "antigravity"
 	PlatformKiro        = "kiro"
 	PlatformGrok        = "grok"
+	// Adobe Firefly（图像生成）。与其它平台不同，它不是 OpenAI 兼容上游，
+	// 而是由 internal/pkg/adobe 直连 Adobe 的 3p 端点后合成 OpenAI 形状的响应。
+	PlatformAdobe = "adobe"
 	// 国产 OpenAI 兼容供应商（经 OpenAI 网关转发，按 Chat Completions 协议）。
-	PlatformKimi      = "kimi"     // Kimi (月之暗面 / Moonshot)
-	PlatformZhipu     = "zhipu"    // 智谱 GLM (bigmodel)
-	PlatformDeepseek  = "deepseek" // DeepSeek
-	PlatformComposite = "composite"
+	PlatformKimi     = "kimi"     // Kimi (月之暗面 / Moonshot)
+	PlatformZhipu    = "zhipu"    // 智谱 GLM (bigmodel)
+	PlatformDeepseek = "deepseek" // DeepSeek
+	PlatformMiniMax  = "minimax"  // MiniMax (M 系列)
+	// PlatformOpenCodeGo 是 OpenCode 平台（账号类型 Zen 按量 / Go 订阅）。
+	// 值保持 opencode_go 以兼容已落库的分组、配额与 Composite 路由 CHECK。
+	PlatformOpenCodeGo = "opencode_go"
+	PlatformComposite  = "composite"
 )
 
 // Account mode constants 区分国产供应商的「按量付费（余额）」与「Coding Plan」两种接入方式。
@@ -36,6 +43,8 @@ const (
 const (
 	AccountModePayG   = "payg"   // 按量付费：消耗余额，做余额检测冷却
 	AccountModeCoding = "coding" // Coding Plan：滚动用量窗口冷却（5h / weekly）
+	AccountModeZen    = "zen"    // OpenCode Zen：按量付费，https://opencode.ai/zen/v1
+	AccountModeGo     = "go"     // OpenCode Go：订阅额度窗口，https://opencode.ai/zen/go/v1
 )
 
 // API protocol constants 国产供应商的上游 API 协议维度。存储于
@@ -44,7 +53,7 @@ const (
 const (
 	APIProtocolChatCompletions = "chat_completions" // OpenAI Chat Completions（默认）
 	APIProtocolAnthropic       = "anthropic"        // 原生 Anthropic /v1/messages（适配 Claude Code）
-	APIProtocolResponses       = "responses"        // OpenAI Responses（仅 deepseek，适配 Codex）
+	APIProtocolResponses       = "responses"        // OpenAI Responses（deepseek / kimi / minimax 原生端点，适配 Codex）
 	APIProtocolAdaptive        = "adaptive"         // 按入站协议优先选择供应商原生端点
 )
 
@@ -99,6 +108,7 @@ const AntigravityGemini31ProAgentModel = "gemini-pro-agent"
 // 与前端 useModelWhitelist.ts 中的 antigravityDefaultMappings 保持一致
 var DefaultAntigravityModelMapping = map[string]string{
 	// Claude 白名单
+	"claude-fable-5-1":           "claude-fable-5-1",         // 官方模型
 	"claude-fable-5":             "claude-fable-5",           // 官方模型
 	"claude-opus-4-8":            "claude-opus-4-8",          // 官方模型
 	"claude-opus-4-7":            "claude-opus-4-7",          // 官方模型
@@ -145,6 +155,18 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-3.6-flash-low":    "gemini-3.6-flash-low",
 	"gemini-3.6-flash-medium": "gemini-3.6-flash-medium",
 	"gemini-3.6-flash-tiered": "gemini-3.6-flash-tiered",
+	// Gemini 3.7 Flash tiered models
+	"gemini-3.7-flash":        "gemini-3.7-flash",
+	"gemini-3.7-flash-high":   "gemini-3.7-flash-high",
+	"gemini-3.7-flash-low":    "gemini-3.7-flash-low",
+	"gemini-3.7-flash-medium": "gemini-3.7-flash-medium",
+	"gemini-3.7-flash-tiered": "gemini-3.7-flash-tiered",
+	// Gemini 3.8 Flash tiered models
+	"gemini-3.8-flash":        "gemini-3.8-flash",
+	"gemini-3.8-flash-high":   "gemini-3.8-flash-high",
+	"gemini-3.8-flash-low":    "gemini-3.8-flash-low",
+	"gemini-3.8-flash-medium": "gemini-3.8-flash-medium",
+	"gemini-3.8-flash-tiered": "gemini-3.8-flash-tiered",
 	// Gemini 3 image 兼容映射（向 3.1 image 迁移）
 	"gemini-3-pro-image":         "gemini-3.1-flash-image",
 	"gemini-3-pro-image-preview": "gemini-3.1-flash-image",
@@ -180,13 +202,48 @@ var DefaultKiroModelMapping = map[string]string{
 	"claude-haiku-4-5-20251001-thinking":  "claude-haiku-4.5",
 }
 
+// DefaultAdobeModelMapping 是 Adobe 平台的默认模型映射。
+// 键为对外暴露/允许请求的模型名，值为 internal/pkg/adobe 的族级模型 id。
+//
+// 只用精确键，不写通配符：机制本身支持通配（见 service.matchWildcardMappingResult），
+// 留给用户按账号自配，默认表保持可预测。
+//
+// firefly-* 原名也必须列进来：model_mapping 非空时是严格白名单，
+// 不列的话显式请求 firefly-gpt-image-2 反而会被挡掉。
+var DefaultAdobeModelMapping = map[string]string{
+	// gpt-image 家族。sunburst 是 UI 展示名（对应上游 modelVersion=gpt-image-2.5-prism）。
+	"gpt-image-2":            "firefly-gpt-image-2",
+	"gpt-image-1.5":          "firefly-gpt-image-1.5",
+	"gpt-image-2.5-flare":    "firefly-gpt-image-2-5-flare",
+	"gpt-image-2.5-prism":    "firefly-gpt-image-2-5-prism",
+	"gpt-image-2.5-sunburst": "firefly-gpt-image-2-5-prism",
+	// 更早的 gpt-image 名字：Adobe 侧没有对应版本，一律落 v2；参考实现 GPT2Image-Pro 也是同样处理。
+	"gpt-image":        "firefly-gpt-image-2",
+	"gpt-image-1":      "firefly-gpt-image-2",
+	"gpt-image-1-mini": "firefly-gpt-image-2",
+	// Google Gemini nano-banana 系
+	"nano-banana-pro": "firefly-nano-banana-pro",
+	"nano-banana":     "firefly-nano-banana",
+	"nano-banana2":    "firefly-nano-banana2",
+	// Step 7 新家族别名
+	"flux-pro":          "firefly-flux-pro",
+	"flux-ultra":        "firefly-flux-ultra",
+	"imagen-4":          "firefly-imagen-4",
+	"imagen-4-fast":     "firefly-imagen-4-fast",
+	"gpt-4o-image":      "firefly-gpt-4o-image",
+	"runway-gen4-image": "firefly-runway-gen4-image",
+	// Step 8：所有 firefly-* 左侧的直通条目已删除。用户面看到的都是干净外部名（见 adobe.ImageModelIDs），
+	// 直接请求内部族 id（如 firefly-imagen-4）将被 IsModelSupported 判为不支持——这是有意的护栏。
+}
+
 // DefaultBedrockModelMapping 是 AWS Bedrock 平台的默认模型映射
 // 将 Anthropic 标准模型名映射到 Bedrock 模型 ID
 // 注意：此处的 "us." 前缀仅为默认值，ResolveBedrockModelID 会根据账号配置的
 // aws_region 自动调整为匹配的区域前缀（如 eu.、apac.、jp. 等）
 var DefaultBedrockModelMapping = map[string]string{
 	// Claude Fable
-	"claude-fable-5": "anthropic.claude-fable-5",
+	"claude-fable-5-1": "anthropic.claude-fable-5-1",
+	"claude-fable-5":   "anthropic.claude-fable-5",
 	// Claude Opus
 	"claude-opus-5":            "us.anthropic.claude-opus-5-v1",
 	"claude-opus-4-8":          "us.anthropic.claude-opus-4-8-v1",

@@ -27,8 +27,12 @@ func TestBuildRuntimeUserAgentStable(t *testing.T) {
 	require.Equal(t, ua1, ua2)
 	require.Contains(t, ua1, "KiroIDE-")
 	require.Contains(t, amzUA, "KiroIDE-")
-	require.Contains(t, ua1, "KiroIDE-0.12.301")
-	require.Contains(t, ua1, "aws-sdk-js/1.0.34")
+	require.Contains(t, ua1, "KiroIDE-1.0.437")
+	// streamingSDKVersions 是多元素池，seed 决定命中哪一条；用 fingerprint 反查而
+	// 非硬编码字面量，避免每次扩池就要改测试。
+	fp := globalRuntimeFingerprints().Get(key, machineID)
+	require.Contains(t, ua1, "aws-sdk-js/"+fp.StreamingSDKVersion)
+	require.Contains(t, ua1, "api/codewhispererstreaming#"+fp.StreamingSDKVersion)
 	require.Contains(t, ua1, "md/nodejs#22.22.0")
 	require.Contains(t, ua1, machineID)
 	require.Contains(t, amzUA, machineID)
@@ -626,7 +630,7 @@ func TestParseNonStreamingEventStream(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "end_turn", result.StopReason)
 	require.Equal(t, 12, result.Usage.InputTokens)
-	require.Equal(t, 3, result.Usage.CacheReadInputTokens)
+	require.Zero(t, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.Equal(t, 22, result.Usage.TotalTokens)
 
@@ -640,6 +644,33 @@ func TestParseNonStreamingEventStream(t *testing.T) {
 	firstText, ok := first["text"].(string)
 	require.True(t, ok)
 	require.True(t, strings.Contains(firstText, "hello from kiro"))
+	require.False(t, gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Exists())
+	require.NotContains(t, string(result.ResponseBody), `"cache_read_input_tokens":3`)
+}
+
+func TestParseNonStreamingEventStreamIgnoresUpstreamCacheUsageWithoutEmulation(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens":  120,
+				"outputTokens":         7,
+				"cacheReadInputTokens": 999,
+				"totalTokens":          1126,
+			},
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, 120, result.Usage.InputTokens)
+	require.Equal(t, 7, result.Usage.OutputTokens)
+	require.Equal(t, 1126, result.Usage.TotalTokens)
+	require.Zero(t, result.Usage.CacheReadInputTokens)
+	require.Zero(t, result.Usage.CacheCreationInputTokens)
+	require.False(t, gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Exists())
+	require.False(t, gjson.GetBytes(result.ResponseBody, "usage.cache_creation_input_tokens").Exists())
+	require.NotContains(t, string(result.ResponseBody), `"cache_read_input_tokens":999`)
 }
 
 func TestParseNonStreamingEventStreamPreservesLargeIntegerInMapInput(t *testing.T) {
@@ -2464,8 +2495,9 @@ func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponse(t *testing.T) {
 	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 		"messageMetadataEvent": map[string]any{
 			"tokenUsage": map[string]any{
-				"uncachedInputTokens": 120,
-				"outputTokens":        7,
+				"uncachedInputTokens":  120,
+				"outputTokens":         7,
+				"cacheReadInputTokens": 999,
 			},
 		},
 	}))
@@ -2481,10 +2513,12 @@ func TestKiroCacheEmulationUsageInjectedIntoNonStreamingResponse(t *testing.T) {
 	require.Equal(t, 20, result.Usage.InputTokens)
 	require.Equal(t, 70, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 30, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 127, result.Usage.TotalTokens)
 	require.Equal(t, 20, int(gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int()))
 	require.Equal(t, 70, int(gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Int()))
 	require.Equal(t, 30, int(gjson.GetBytes(result.ResponseBody, "usage.cache_creation_input_tokens").Int()))
 	require.Equal(t, 30, int(gjson.GetBytes(result.ResponseBody, "usage.cache_creation.ephemeral_5m_input_tokens").Int()))
+	require.NotContains(t, string(result.ResponseBody), `"cache_read_input_tokens":999`)
 }
 
 func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
@@ -2492,8 +2526,9 @@ func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
 	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 		"messageMetadataEvent": map[string]any{
 			"tokenUsage": map[string]any{
-				"uncachedInputTokens": 120,
-				"outputTokens":        7,
+				"uncachedInputTokens":  120,
+				"outputTokens":         7,
+				"cacheReadInputTokens": 999,
 			},
 		},
 	}))
@@ -2513,11 +2548,18 @@ func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
 	require.Equal(t, 20, result.Usage.InputTokens)
 	require.Equal(t, 70, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 30, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 127, result.Usage.TotalTokens)
 	output := out.String()
-	require.Contains(t, output, `"input_tokens":20`)
-	require.Contains(t, output, `"cache_read_input_tokens":70`)
-	require.Contains(t, output, `"cache_creation_input_tokens":30`)
+	messageStart := extractSSEEventData(t, output, "message_start")
+	require.Equal(t, 20, int(gjson.GetBytes(messageStart, "message.usage.input_tokens").Int()))
+	require.Equal(t, 70, int(gjson.GetBytes(messageStart, "message.usage.cache_read_input_tokens").Int()))
+	require.Equal(t, 30, int(gjson.GetBytes(messageStart, "message.usage.cache_creation_input_tokens").Int()))
+	messageDelta := extractSSEEventData(t, output, "message_delta")
+	require.Equal(t, 20, int(gjson.GetBytes(messageDelta, "usage.input_tokens").Int()))
+	require.Equal(t, 70, int(gjson.GetBytes(messageDelta, "usage.cache_read_input_tokens").Int()))
+	require.Equal(t, 30, int(gjson.GetBytes(messageDelta, "usage.cache_creation_input_tokens").Int()))
 	require.Contains(t, output, `"ephemeral_1h_input_tokens":30`)
+	require.NotContains(t, output, `"cache_read_input_tokens":999`)
 }
 
 func TestNormalizeStreamingToolInput(t *testing.T) {
