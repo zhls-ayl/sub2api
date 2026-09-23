@@ -141,6 +141,7 @@ func (s *AdobeImageService) GenerateCall(
 	if err != nil {
 		return nil, err
 	}
+	startTime := time.Now()
 
 	requestedModel := strings.TrimSpace(req.Model)
 	if call.ChannelMappedModel != "" {
@@ -164,7 +165,7 @@ func (s *AdobeImageService) GenerateCall(
 
 	upstreamCtx, cancelUpstream := context.WithTimeout(context.WithoutCancel(ctx), adobeImageDetachedTimeout)
 	defer cancelUpstream()
-	images, err := generateAdobeImages(upstreamCtx, client, token, adobe.ImagePayloadOptions{
+	images, err := generateAdobeImages(upstreamCtx, client, token, account.GetCredential("arp_session_id"), adobe.ImagePayloadOptions{
 		Prompt:               req.Prompt,
 		AspectRatio:          conf.AspectRatio,
 		OutputResolution:     conf.OutputResolution,
@@ -202,6 +203,7 @@ func (s *AdobeImageService) GenerateCall(
 			ImageSize:        string(conf.OutputResolution),
 			UpstreamModel:    conf.ModelID,
 			UpstreamEndpoint: adobe.ImageSubmitURL,
+			Duration:         time.Since(startTime),
 		},
 	}, nil
 }
@@ -212,6 +214,7 @@ func generateAdobeImages(
 	ctx context.Context,
 	client *adobe.Client,
 	token string,
+	arpSessionID string,
 	opts adobe.ImagePayloadOptions,
 	n int,
 ) ([][]byte, error) {
@@ -225,8 +228,9 @@ func generateAdobeImages(
 			seed := baseSeed + i
 			itemOpts.Seed = &seed
 			generated, err := client.GenerateImage(groupCtx, adobe.GenerateImageInput{
-				Token:   token,
-				Options: itemOpts,
+				Token:        token,
+				ARPSessionID: arpSessionID,
+				Options:      itemOpts,
 			})
 			if err != nil {
 				return err

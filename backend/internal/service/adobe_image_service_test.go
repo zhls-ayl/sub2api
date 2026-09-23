@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/adobe"
 	"github.com/stretchr/testify/require"
@@ -110,6 +111,7 @@ func TestAdobeImageServiceGenerateFillsBillingFields(t *testing.T) {
 	require.Equal(t, "gpt-image-2", result.Forward.Model)
 	require.Equal(t, "firefly-gpt-image-2", result.Forward.UpstreamModel)
 	require.NotEmpty(t, result.Forward.RequestID)
+	require.Greater(t, result.Forward.Duration, time.Duration(0))
 }
 
 // 账号的默认 mapping 必须真的生效：gpt-image-2 → firefly-gpt-image-2。
@@ -127,6 +129,42 @@ func TestAdobeImageServiceAppliesAccountModelMapping(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "firefly-nano-banana-pro-1k-1x1", result.Forward.UpstreamModel)
+}
+
+func TestAdobeImageServiceMapsGeminiPublicNames(t *testing.T) {
+	api := &adobeFakeTransport{}
+	client := adobeSubmitPollDownload(t, api, []byte("X"))
+	svc := newAdobeTestService(t, client, nil)
+
+	for requested, wantFamily := range map[string]string{
+		"gemini-3-pro-image":     "firefly-nano-banana-pro-1k-1x1",
+		"nano-banana-pro":        "firefly-nano-banana-pro-1k-1x1",
+		"gemini-2.5-flash-image": "firefly-nano-banana-1k-1x1",
+		"gemini-3.1-flash-image": "firefly-nano-banana2-1k-1x1",
+	} {
+		result, err := svc.Generate(context.Background(), adobeTestAccount(), "tok", &OpenAIImagesRequest{
+			Model: requested, Prompt: "x", Size: "1024x1024", N: 1,
+		})
+		require.NoError(t, err, requested)
+		require.Equal(t, requested, result.Forward.Model, requested)
+		require.Equal(t, wantFamily, result.Forward.UpstreamModel, requested)
+	}
+}
+
+func TestAdobeImageServiceForwardsAccountARPSessionID(t *testing.T) {
+	const wantARP = "eyJzaWQiOiJzZXJ2aWNlLWFycCIsImZ0ciI6InJlYWwifQ=="
+	api := &adobeFakeTransport{}
+	client := adobeSubmitPollDownload(t, api, []byte("X"))
+	svc := newAdobeTestService(t, client, nil)
+
+	account := adobeTestAccount()
+	account.Credentials = map[string]any{"arp_session_id": wantARP}
+	_, err := svc.Generate(context.Background(), account, "tok", &OpenAIImagesRequest{
+		Model: "gpt-image-2", Prompt: "x", Size: "1024x1024", N: 1,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, api.calls)
+	require.Equal(t, wantARP, api.calls[0].Headers["x-arp-session-id"])
 }
 
 func TestAdobeImageServicePassesGeminiAspectRatioAndImageSize(t *testing.T) {
@@ -293,6 +331,12 @@ func TestAdobeImageServiceMissingSizeKeepsDefaultTier(t *testing.T) {
 		require.NoError(t, err, size)
 		require.Equal(t, "2K", result.Forward.ImageSize, size)
 		require.Equal(t, "firefly-gpt-image-2", result.Forward.UpstreamModel, size)
+
+		var submitted map[string]any
+		require.NoError(t, json.Unmarshal(api.calls[0].Body, &submitted))
+		require.NotContains(t, submitted, "size")
+		msp := submitted["modelSpecificPayload"].(map[string]any)
+		require.Equal(t, "auto", msp["size"])
 	}
 }
 
