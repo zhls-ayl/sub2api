@@ -1813,12 +1813,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if requestModel == "" {
 		requestModel = "gpt-image-2"
 	}
-	if err := validateOpenAIImagesModel(requestModel); err != nil {
-		return nil, err
+	// OAuth uses native image generation; the shared parser also accepts
+	// compatible provider names for Adobe and API key accounts.
+	if !isOpenAIImageGenerationModel(requestModel) {
+		return nil, fmt.Errorf("images endpoint requires an image model, got %q", requestModel)
 	}
 	upstreamModel := account.GetMappedModel(requestModel)
-	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
-		return nil, err
+	if !isOpenAIImageGenerationModel(upstreamModel) {
+		return nil, fmt.Errorf("images endpoint requires an image model, got %q", upstreamModel)
 	}
 	direct := usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)
 	beginUpstreamResponseModelObservation(c)

@@ -5,10 +5,12 @@ vi.mock('@/api/admin/accounts', () => ({
 }))
 
 import {
+  appendKiroSyncedMappings,
   buildModelMappingObject,
   fetchKiroDefaultMappings,
   getModelsByPlatform,
   getPresetMappingsByPlatform,
+  kiroUpstreamModelID,
   splitModelMappingObject
 } from '../useModelWhitelist'
 
@@ -23,12 +25,14 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('gpt-5.6')
     expect(models).toContain('gpt-6')
     expect(models).toContain('gpt-6-astra')
+    expect(models).toContain('gpt-6.1-sol')
     expect(models).toContain('gpt-6-sol')
     expect(models).toContain('gpt-6-luna')
   })
 
   it('openai 预设映射包含 GPT-6 别名和 Astra', () => {
     expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'GPT-6.1 Sol', from: 'gpt-6.1-sol', to: 'gpt-6.1-sol' }),
       expect.objectContaining({ label: 'GPT-6', from: 'gpt-6', to: 'gpt-6' }),
       expect.objectContaining({ label: 'GPT-6 Astra', from: 'gpt-6-astra', to: 'gpt-6-astra' })
     ]))
@@ -60,8 +64,19 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-5-5')
     expect(getModelsByPlatform('antigravity')).not.toContain('claude-opus-5-5')
+    expect(getModelsByPlatform('claude')).toContain('claude-sonnet-5-5')
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-sonnet-5-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-4-8')
     expect(getModelsByPlatform('antigravity')).toContain('claude-opus-4-8')
+  })
+
+  it('Claude Sonnet 5.5 预设使用各平台的官方模型 ID', () => {
+    expect(getPresetMappingsByPlatform('claude')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Sonnet 5.5', from: 'claude-sonnet-5-5', to: 'claude-sonnet-5-5' })
+    ]))
+    expect(getPresetMappingsByPlatform('bedrock')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Sonnet 5.5', from: 'claude-sonnet-5-5', to: 'global.anthropic.claude-sonnet-5-5' })
+    ]))
   })
 
   it('xAI 模型列表包含 Grok 4.5 官方模型和别名', () => {
@@ -146,6 +161,8 @@ describe('useModelWhitelist', () => {
       'claude-opus-4-6-thinking',
       'claude-opus-5',
       'claude-opus-5-thinking',
+      'claude-opus-5-5',
+      'claude-opus-5-5-thinking',
       'claude-sonnet-5',
       'claude-sonnet-5-thinking',
       'claude-sonnet-4-6',
@@ -236,6 +253,8 @@ describe('useModelWhitelist', () => {
       { from: 'claude-opus-4-6-thinking', to: 'claude-opus-4.6' },
       { from: 'claude-opus-5', to: 'claude-opus-5' },
       { from: 'claude-opus-5-thinking', to: 'claude-opus-5' },
+      { from: 'claude-opus-5-5', to: 'claude-opus-5.5' },
+      { from: 'claude-opus-5-5-thinking', to: 'claude-opus-5.5' },
       { from: 'claude-sonnet-5', to: 'claude-sonnet-5' },
       { from: 'claude-sonnet-5-thinking', to: 'claude-sonnet-5' },
       { from: 'claude-sonnet-4-6', to: 'claude-sonnet-4.6' },
@@ -290,6 +309,8 @@ describe('useModelWhitelist', () => {
       { from: 'claude-opus-4-6-thinking', to: 'claude-opus-4.6' },
       { from: 'claude-opus-5', to: 'claude-opus-5' },
       { from: 'claude-opus-5-thinking', to: 'claude-opus-5' },
+      { from: 'claude-opus-5-5', to: 'claude-opus-5.5' },
+      { from: 'claude-opus-5-5-thinking', to: 'claude-opus-5.5' },
       { from: 'claude-sonnet-5', to: 'claude-sonnet-5' },
       { from: 'claude-sonnet-5-thinking', to: 'claude-sonnet-5' },
       { from: 'claude-sonnet-4-6', to: 'claude-sonnet-4.6' },
@@ -301,7 +322,7 @@ describe('useModelWhitelist', () => {
       { from: 'claude-haiku-4-5-20251001', to: 'claude-haiku-4.5' },
       { from: 'claude-haiku-4-5-20251001-thinking', to: 'claude-haiku-4.5' }
     ]))
-    expect(mappings).toHaveLength(22)
+    expect(mappings).toHaveLength(24)
     expect(mappings.every(item => !item.from.startsWith('kiro-'))).toBe(true)
     expect(mappings.every(item => !item.to.startsWith('kiro-'))).toBe(true)
     expect(mappings.every(item => !item.from.endsWith('-agentic'))).toBe(true)
@@ -398,6 +419,146 @@ describe('useModelWhitelist', () => {
     expect(mapping).toEqual({
       'gpt-5.4': 'gpt-5.4-mini',
       'gpt-latest': 'gpt-5.4'
+    })
+  })
+
+  it('kiro 新模型用同步带回的上游 ID，未知名字不再猜点号', () => {
+    expect(kiroUpstreamModelID('claude-opus-4-8')).toBe('claude-opus-4.8')
+    expect(kiroUpstreamModelID('claude-opus-4-5-20251101')).toBe('claude-opus-4.5')
+    expect(kiroUpstreamModelID('claude-opus-4-9')).toBe('claude-opus-4-9')
+    expect(kiroUpstreamModelID('claude-opus-4-9', { 'claude-opus-4-9': 'claude-opus-4.9' })).toBe('claude-opus-4.9')
+
+    const mapping = buildModelMappingObject(
+      'whitelist',
+      ['claude-opus-4-9', 'claude-opus-4-8'],
+      [],
+      { kiroDirect: true, kiroUpstreamIDs: { 'claude-opus-4-9': 'claude-opus-4.9' } }
+    )
+    expect(mapping).toEqual({
+      'claude-opus-4-9': 'claude-opus-4-9',
+      'claude-opus-4-8': 'claude-opus-4-8'
+    })
+  })
+
+  it('kiro 直连白名单保存为恒等映射，自定义行盖过同名白名单', () => {
+    const mapping = buildModelMappingObject(
+      'combined',
+      ['claude-opus-4-5', 'claude-sonnet-4-thinking'],
+      [{ from: 'claude-opus-4-5', to: 'claude-sonnet-4.6' }],
+      { kiroDirect: true }
+    )
+    expect(mapping).toEqual({
+      'claude-opus-4-5': 'claude-sonnet-4.6',
+      'claude-sonnet-4-thinking': 'claude-sonnet-4-thinking'
+    })
+  })
+
+  it('kiro 旧的点号行归回白名单，不同模型仍留在映射', () => {
+    const parsed = splitModelMappingObject(
+      {
+        'claude-haiku-4-5': 'claude-haiku-4.5',
+        'claude-haiku-4-5-thinking': 'claude-haiku-4.5',
+        'claude-opus-4-5': 'claude-opus-4.5',
+        'claude-opus-4-5-thinking': 'claude-opus-4.5',
+        'claude-sonnet-4-5': 'claude-sonnet-4.5',
+        'claude-sonnet-4-5-thinking': 'claude-sonnet-4.5',
+        'claude-sonnet-4-thinking': 'claude-sonnet-4',
+        'claude-haiku-4-5-20251001': 'claude-haiku-4.5',
+        'claude-opus-4-8': 'claude-sonnet-4.6'
+      },
+      { kiroDirect: true }
+    )
+    expect(parsed.allowedModels).toEqual([
+      'claude-haiku-4-5',
+      'claude-haiku-4-5-thinking',
+      'claude-opus-4-5',
+      'claude-opus-4-5-thinking',
+      'claude-sonnet-4-5',
+      'claude-sonnet-4-5-thinking',
+      'claude-sonnet-4-thinking',
+      'claude-haiku-4-5-20251001'
+    ])
+    expect(parsed.modelMappings).toEqual([{ from: 'claude-opus-4-8', to: 'claude-sonnet-4.6' }])
+
+    const remapped = splitModelMappingObject(
+      { 'claude-opus-4-5': 'claude-sonnet-4.6' },
+      { kiroDirect: true }
+    )
+    expect(remapped.allowedModels).toEqual([])
+    expect(remapped.modelMappings).toEqual([{ from: 'claude-opus-4-5', to: 'claude-sonnet-4.6' }])
+  })
+
+  it('kiro 后端折不出来的写法差异仍留在映射', () => {
+    const parsed = splitModelMappingObject(
+      {
+        'claude-3-7-sonnet': 'claude-3.7-sonnet',
+        'gpt-5-6-sol': 'gpt-5.6-sol',
+        'claude-opus-4-6': 'claude-opus-4.6-thinking'
+      },
+      { kiroDirect: true }
+    )
+    expect(parsed.allowedModels).toEqual([])
+    expect(parsed.modelMappings).toEqual([
+      { from: 'claude-3-7-sonnet', to: 'claude-3.7-sonnet' },
+      { from: 'gpt-5-6-sol', to: 'gpt-5.6-sol' },
+      { from: 'claude-opus-4-6', to: 'claude-opus-4.6-thinking' }
+    ])
+  })
+
+  it('kiro 同步白名单只在后端折不出来时写上游 ID，往返不变', () => {
+    const options = {
+      kiroDirect: true,
+      kiroUpstreamIDs: {
+        'claude-3-7-sonnet': 'claude-3.7-sonnet',
+        'claude-opus-4-9': 'claude-opus-4.9'
+      }
+    }
+    const mapping = buildModelMappingObject(
+      'combined',
+      ['claude-3-7-sonnet', 'claude-opus-4-9'],
+      [],
+      options
+    )
+    expect(mapping).toEqual({
+      'claude-3-7-sonnet': 'claude-3.7-sonnet',
+      'claude-opus-4-9': 'claude-opus-4-9'
+    })
+
+    const parsed = splitModelMappingObject(mapping, { kiroDirect: true })
+    expect(parsed.allowedModels).toEqual(['claude-opus-4-9'])
+    expect(
+      buildModelMappingObject('combined', parsed.allowedModels, parsed.modelMappings, { kiroDirect: true })
+    ).toEqual(mapping)
+  })
+
+  it('kiro 同步只追加还没有的 from，目标用上游 ID', () => {
+    const applied = appendKiroSyncedMappings(
+      [{ from: 'claude-opus-4-8', to: 'claude-sonnet-4.6' }],
+      ['claude-opus-4-8', 'claude-opus-4-9', 'claude-opus-4-9-thinking'],
+      {
+        'claude-opus-4-9': 'claude-opus-4.9',
+        'claude-opus-4-9-thinking': 'claude-opus-4.9'
+      }
+    )
+
+    expect(applied.added).toBe(2)
+    expect(applied.rows).toEqual([
+      { from: 'claude-opus-4-8', to: 'claude-sonnet-4.6' },
+      { from: 'claude-opus-4-9', to: 'claude-opus-4.9' },
+      { from: 'claude-opus-4-9-thinking', to: 'claude-opus-4.9' }
+    ])
+  })
+
+  it('combined mode retains a mapping when a whitelist entry has the same source', () => {
+    expect(buildModelMappingObject('combined', ['gpt-latest'], [{ from: 'gpt-latest', to: 'deepseek-chat' }])).toEqual({
+      'gpt-latest': 'deepseek-chat'
+    })
+  })
+
+  it('split mapping keeps only identity entries in the whitelist after reopening', () => {
+    expect(splitModelMappingObject({ 'gpt-latest': 'deepseek-chat', 'gpt-5.4': 'gpt-5.4' })).toEqual({
+      allowedModels: ['gpt-5.4'],
+      modelMappings: [{ from: 'gpt-latest', to: 'deepseek-chat' }]
     })
   })
 

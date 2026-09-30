@@ -142,7 +142,7 @@ func TestCompatibleImagesNativeAccountsRejectGeminiBeforeForwarding(t *testing.T
 				c.Request = httptest.NewRequest(http.MethodPost, openAIImagesGenerationsEndpoint, nil)
 				upstream := &httpUpstreamRecorder{}
 				svc := &OpenAIGatewayService{httpUpstream: upstream}
-				_, err := svc.ForwardImages(context.Background(), c, account, nil, &OpenAIImagesRequest{Model: model}, "")
+				_, err := svc.ForwardImages(context.Background(), c, account, nil, &OpenAIImagesRequest{Model: model, Prompt: "draw"}, "")
 				require.ErrorContains(t, err, "images endpoint requires an image model")
 				require.Empty(t, upstream.requests)
 			})

@@ -40,6 +40,8 @@ func TestDefaultKiroModelMapping_MatchesKiroReferenceModels(t *testing.T) {
 		"claude-opus-4-6-thinking":            "claude-opus-4.6",
 		"claude-opus-5":                       "claude-opus-5",
 		"claude-opus-5-thinking":              "claude-opus-5",
+		"claude-opus-5-5":                     "claude-opus-5.5",
+		"claude-opus-5-5-thinking":            "claude-opus-5.5",
 		"claude-sonnet-5":                     "claude-sonnet-5",
 		"claude-sonnet-5-thinking":            "claude-sonnet-5",
 		"claude-sonnet-4-6":                   "claude-sonnet-4.6",
@@ -177,9 +179,10 @@ func TestDefaultBedrockModelMapping_ContainsNewClaudeModels(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"claude-fable-5-1": "anthropic.claude-fable-5-1",
-		"claude-fable-5":   "anthropic.claude-fable-5",
-		"claude-opus-4-8":  "us.anthropic.claude-opus-4-8-v1",
+		"claude-fable-5-1":  "anthropic.claude-fable-5-1",
+		"claude-fable-5":    "anthropic.claude-fable-5",
+		"claude-opus-4-8":   "us.anthropic.claude-opus-4-8-v1",
+		"claude-sonnet-5-5": "global.anthropic.claude-sonnet-5-5",
 	}
 	for from, want := range cases {
 		got, ok := DefaultBedrockModelMapping[from]
