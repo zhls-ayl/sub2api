@@ -273,6 +273,8 @@ func MapModel(model string) string {
 		return "claude-opus-4.6"
 	case "claude-opus-5", "claude-opus-5-thinking":
 		return "claude-opus-5"
+	case "claude-opus-5-5", "claude-opus-5.5":
+		return "claude-opus-5.5"
 	case "claude-sonnet-5", "claude-sonnet-5-thinking":
 		return "claude-sonnet-5"
 	case "claude-sonnet-4-6", "claude-sonnet-4-6-thinking", "claude-sonnet-4.6":
@@ -368,9 +370,9 @@ func IsKiroGPTModel(modelID string) bool {
 func kiroMaxOutputTokensForModel(model string) int {
 	normalized := normalizeModelAlias(model)
 	switch normalized {
-	// Opus 4.7 / 4.8 / 5 与 Kiro GPT-5.6 精确模型上限 128000（对齐 Kiro 官方规格）。
+	// Opus 4.7 / 4.8 / 5 / 5.5 与 Kiro GPT-5.6 精确模型上限 128000（对齐 Kiro 官方规格）。
 	case "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7",
-		"claude-opus-5",
+		"claude-opus-5", "claude-opus-5-5", "claude-opus-5.5",
 		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return 128000
 	default:
@@ -4386,10 +4388,16 @@ func getString(m map[string]any, key string) string {
 }
 
 func readStopReason(m map[string]any) string {
-	if stop := getString(m, "stop_reason"); stop != "" {
-		return stop
+	stop := getString(m, "stop_reason")
+	if stop == "" {
+		stop = getString(m, "stopReason")
 	}
-	return getString(m, "stopReason")
+	switch strings.ToLower(strings.TrimSpace(stop)) {
+	case "end_turn", "tool_use", "max_tokens", "stop_sequence", "pause_turn", "refusal", "model_context_window_exceeded":
+		return strings.ToLower(strings.TrimSpace(stop))
+	default:
+		return ""
+	}
 }
 
 func toInt(value any) (int, bool) {

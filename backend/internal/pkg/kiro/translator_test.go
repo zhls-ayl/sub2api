@@ -648,6 +648,125 @@ func TestParseNonStreamingEventStream(t *testing.T) {
 	require.NotContains(t, string(result.ResponseBody), `"cache_read_input_tokens":3`)
 }
 
+func TestKiroStopReasonNormalizesUppercaseEndTurnForBufferedAndStreamingResponses(t *testing.T) {
+	newStream := func() *bytes.Buffer {
+		stream := bytes.NewBuffer(nil)
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{
+				"content":    "canonical response",
+				"stopReason": "END_TURN",
+			},
+		}))
+		return stream
+	}
+
+	buffered, err := ParseNonStreamingEventStreamWithContext(newStream(), "claude-opus-5-5", KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", buffered.StopReason)
+	require.Equal(t, "end_turn", gjson.GetBytes(buffered.ResponseBody, "stop_reason").String())
+
+	var output bytes.Buffer
+	streamed, err := StreamEventStreamAsAnthropicWithContext(context.Background(), newStream(), &output, "claude-opus-5-5", 0, KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", streamed.StopReason)
+	require.Contains(t, output.String(), `"stop_reason":"end_turn"`)
+}
+
+func TestKiroStopReasonEventStreamPreservesAllowedValuesAndDropsUnknownValues(t *testing.T) {
+	t.Run("buffered max_tokens", func(t *testing.T) {
+		stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{
+				"content":    "truncated",
+				"stopReason": "MAX_TOKENS",
+			},
+		}))
+
+		result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5-5", KiroRequestContext{})
+		require.NoError(t, err)
+		require.Equal(t, "max_tokens", result.StopReason)
+		require.Equal(t, "max_tokens", gjson.GetBytes(result.ResponseBody, "stop_reason").String())
+	})
+
+	t.Run("buffered Anthropic terminal values", func(t *testing.T) {
+		for raw, want := range map[string]string{
+			"PAUSE_TURN":                    "pause_turn",
+			"REFUSAL":                       "refusal",
+			"MODEL_CONTEXT_WINDOW_EXCEEDED": "model_context_window_exceeded",
+		} {
+			t.Run(want, func(t *testing.T) {
+				stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+					"assistantResponseEvent": map[string]any{
+						"content":    "terminal",
+						"stopReason": raw,
+					},
+				}))
+
+				result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5-5", KiroRequestContext{})
+				require.NoError(t, err)
+				require.Equal(t, want, result.StopReason)
+				require.Equal(t, want, gjson.GetBytes(result.ResponseBody, "stop_reason").String())
+			})
+		}
+	})
+
+	t.Run("streaming tool_use", func(t *testing.T) {
+		stream := bytes.NewBuffer(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+			"stopReason": "TOOL_USE",
+			"toolUseEvent": map[string]any{
+				"toolUseId": "toolu_uppercase_stop_reason",
+				"name":      "write_file",
+				"input":     `{"path":"main.go","content":"package main"}`,
+				"stop":      true,
+			},
+		}))
+
+		var output bytes.Buffer
+		result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &output, "claude-opus-5-5", 0, KiroRequestContext{})
+		require.NoError(t, err)
+		require.Equal(t, "tool_use", result.StopReason)
+		require.Contains(t, output.String(), `"stop_reason":"tool_use"`)
+	})
+
+	t.Run("unknown buffered and streaming", func(t *testing.T) {
+		newStream := func() *bytes.Buffer {
+			stream := bytes.NewBuffer(nil)
+			_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+				"assistantResponseEvent": map[string]any{
+					"content":    "safe fallback",
+					"stopReason": "UNSUPPORTED_STOP_REASON",
+				},
+			}))
+			return stream
+		}
+
+		buffered, err := ParseNonStreamingEventStreamWithContext(newStream(), "claude-opus-5-5", KiroRequestContext{})
+		require.NoError(t, err)
+		require.Equal(t, "end_turn", buffered.StopReason)
+		require.NotContains(t, string(buffered.ResponseBody), "UNSUPPORTED_STOP_REASON")
+
+		var output bytes.Buffer
+		streamed, err := StreamEventStreamAsAnthropicWithContext(context.Background(), newStream(), &output, "claude-opus-5-5", 0, KiroRequestContext{})
+		require.NoError(t, err)
+		require.Equal(t, "end_turn", streamed.StopReason)
+		require.NotContains(t, output.String(), "UNSUPPORTED_STOP_REASON")
+	})
+
+	t.Run("streaming pause_turn remains non-terminal", func(t *testing.T) {
+		stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{
+				"content":    "continue",
+				"stopReason": "PAUSE_TURN",
+			},
+		}))
+
+		var output bytes.Buffer
+		result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &output, "claude-opus-5-5", 0, KiroRequestContext{})
+		require.NoError(t, err)
+		require.Equal(t, "end_turn", result.StopReason)
+		require.NotContains(t, output.String(), "pause_turn")
+	})
+}
+
 func TestParseNonStreamingEventStreamIgnoresUpstreamCacheUsageWithoutEmulation(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
@@ -2699,6 +2818,8 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 		"claude-opus-4.7":                     "claude-opus-4.7",
 		"claude-opus-5":                       "claude-opus-5",
 		"claude-opus-5-thinking":              "claude-opus-5",
+		"claude-opus-5-5":                     "claude-opus-5.5",
+		"claude-opus-5.5":                     "claude-opus-5.5",
 		"claude-sonnet-4-6":                   "claude-sonnet-4.6",
 		"claude-sonnet-4-6-thinking":          "claude-sonnet-4.6",
 		"claude-sonnet-4.6":                   "claude-sonnet-4.6",
@@ -2764,6 +2885,23 @@ func TestKiroMaxOutputTokensForOpus5(t *testing.T) {
 
 	require.Equal(t, 128000, kiroMaxOutputTokensForModel("claude-opus-5"))
 	require.Equal(t, 128000, kiroMaxOutputTokensForModel("claude-opus-5-thinking"))
+	require.Equal(t, 128000, kiroMaxOutputTokensForModel("claude-opus-5-5"))
+	require.Equal(t, 128000, kiroMaxOutputTokensForModel("claude-opus-5.5"))
+}
+
+func TestBuildKiroPayloadForOpus55UsesDottedUpstreamModelID(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5-5",
+		"max_tokens":128001,
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	upstreamModel := MapModel("claude-opus-5-5")
+	require.Equal(t, "claude-opus-5.5", upstreamModel)
+	result, err := BuildKiroPayloadWithContext(body, upstreamModel, "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-5.5", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.modelId").String())
+	require.Equal(t, 128000, result.Context.MaxOutputTokens)
 }
 
 func TestIsOutputConfigPathModelSupportsFutureVersions(t *testing.T) {

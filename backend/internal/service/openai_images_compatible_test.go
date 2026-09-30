@@ -130,22 +130,36 @@ func TestCompatibleImagesForwardGemini(t *testing.T) {
 
 func TestCompatibleImagesNativeAccountsRejectGeminiBeforeForwarding(t *testing.T) {
 	for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken} {
-		for _, mapping := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/mapping=%t", typ, mapping), func(t *testing.T) {
-				model := "gemini-3-pro-image"
-				account := &Account{Platform: PlatformOpenAI, Type: typ, Credentials: map[string]any{"access_token": "unused"}}
-				if mapping {
-					account.Credentials["model_mapping"] = map[string]any{"gpt-image-2": model}
-					model = "gpt-image-2"
-				}
-				c, _ := gin.CreateTestContext(httptest.NewRecorder())
-				c.Request = httptest.NewRequest(http.MethodPost, openAIImagesGenerationsEndpoint, nil)
-				upstream := &httpUpstreamRecorder{}
-				svc := &OpenAIGatewayService{httpUpstream: upstream}
-				_, err := svc.ForwardImages(context.Background(), c, account, nil, &OpenAIImagesRequest{Model: model}, "")
-				require.ErrorContains(t, err, "images endpoint requires an image model")
-				require.Empty(t, upstream.requests)
-			})
+		for _, endpoint := range []string{openAIImagesGenerationsEndpoint, openAIImagesEditsEndpoint} {
+			for _, route := range []string{"explicit", "account_mapping", "channel_mapping"} {
+				t.Run(fmt.Sprintf("%s/%s/%s", typ, endpoint, route), func(t *testing.T) {
+					requestModel := "gemini-3-pro-image"
+					channelModel := ""
+					credentials := map[string]any{"access_token": "unused"}
+					if route == "account_mapping" {
+						requestModel = "gpt-image-2"
+						credentials["model_mapping"] = map[string]any{requestModel: "gemini-3-pro-image"}
+					}
+					if route == "channel_mapping" {
+						requestModel = "gpt-image-2"
+						channelModel = "gemini-3-pro-image"
+					}
+					body := []byte(fmt.Sprintf(`{"model":%q,"prompt":"draw a cat"}`, requestModel))
+					if endpoint == openAIImagesEditsEndpoint {
+						body = []byte(fmt.Sprintf(`{"model":%q,"prompt":"draw a cat","images":[{"image_url":"https://source.example/input.png"}]}`, requestModel))
+					}
+					c, _ := gin.CreateTestContext(httptest.NewRecorder())
+					c.Request = httptest.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+					c.Request.Header.Set("Content-Type", "application/json")
+					parsed, err := (&OpenAIGatewayService{}).ParseOpenAIImagesRequest(c, body)
+					require.NoError(t, err)
+					upstream := &httpUpstreamRecorder{}
+					svc := &OpenAIGatewayService{httpUpstream: upstream}
+					_, err = svc.ForwardImages(context.Background(), c, &Account{Platform: PlatformOpenAI, Type: typ, Credentials: credentials}, body, parsed, channelModel)
+					require.ErrorContains(t, err, "compatible image model requires an API-key account")
+					require.Empty(t, upstream.requests)
+				})
+			}
 		}
 	}
 }

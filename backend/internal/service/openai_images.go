@@ -619,6 +619,22 @@ func (s *OpenAIGatewayService) ForwardImages(
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
+	if account == nil {
+		return nil, fmt.Errorf("images account is required")
+	}
+	requestModel := strings.TrimSpace(parsed.Model)
+	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" {
+		requestModel = mapped
+	}
+	// Gemini-compatible image models use the API-key passthrough protocol. An
+	// OAuth-like account must never route one through the native Responses path,
+	// including when the compatible model arrives through a channel or account
+	// mapping.
+	for _, model := range []string{requestModel, account.GetMappedModel(requestModel)} {
+		if parsed.RequiredCapabilityForModel(model) == OpenAIImagesCapabilityAPIKey && !account.SupportsOpenAIImageCapability(OpenAIImagesCapabilityAPIKey) {
+			return nil, fmt.Errorf("compatible image model requires an API-key account")
+		}
+	}
 	switch account.Type {
 	case AccountTypeAPIKey:
 		return s.forwardOpenAIImagesAPIKey(ctx, c, account, body, parsed, channelMappedModel)

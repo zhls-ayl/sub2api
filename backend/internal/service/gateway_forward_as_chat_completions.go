@@ -119,6 +119,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	var resp *http.Response
 	var reasoningEffort *string
 	if isKiroDirectModeAccount(account) {
+		// Kiro sends the converted Anthropic body directly, so preserve the
+		// effort that was actually forwarded for downstream usage auditing.
+		reasoningEffort = NormalizeClaudeOutputEffort(gjson.GetBytes(anthropicBody, "output_config.effort").String())
+		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, anthropicBody, mappedModel)
 		var group *Group
 		if parsed != nil {
 			group = parsed.Group

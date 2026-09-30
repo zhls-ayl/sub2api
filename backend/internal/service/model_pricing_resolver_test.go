@@ -21,6 +21,12 @@ func newTestBillingServiceForResolver() *BillingService {
 		CacheReadPricePerToken:     0.3e-6,
 		SupportsCacheBreakdown:     false,
 	}
+	bs.fallbackPrices["gpt-5.6-luna"] = &ModelPricing{
+		InputPricePerToken:         0.2e-6,
+		OutputPricePerToken:        1.2e-6,
+		CacheCreationPricePerToken: 0.25e-6,
+		CacheReadPricePerToken:     0.02e-6,
+	}
 	return bs
 }
 
@@ -284,6 +290,9 @@ func TestResolve_KiroGPT56FallsBackToDefaultOpenAIPricingWhenNoChannelPrice(t *t
 
 	require.NotNil(t, resolved)
 	require.Equal(t, BillingModeToken, resolved.Mode)
+	// Resolver labels every successful BillingService lookup as LiteLLM; this
+	// fixture provides the built-in card because it intentionally has no
+	// pricingService.
 	require.Equal(t, PricingSourceLiteLLM, resolved.Source)
 	require.NotNil(t, resolved.BasePricing)
 	require.InDelta(t, 0.2e-6, resolved.BasePricing.InputPricePerToken, 1e-12)

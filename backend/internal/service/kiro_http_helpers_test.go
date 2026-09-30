@@ -293,6 +293,40 @@ func TestBuildKiroPayloadForAccountMapsOpus47ToDottedModelID(t *testing.T) {
 	require.Equal(t, "claude-opus-4.7", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.modelId").String())
 }
 
+func TestBuildKiroPayloadForAccountMapsOpus55ToDottedModelID(t *testing.T) {
+	account := &Account{
+		ID:       11,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-opus-5-5": "claude-opus-5.5",
+			},
+		},
+	}
+	body := []byte(`{
+		"model":"claude-opus-5-5",
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	mappedModel := account.GetMappedModel("claude-opus-5-5")
+	modelID := kiropkg.MapModel(mappedModel)
+	require.Equal(t, "claude-opus-5.5", modelID)
+
+	buildResult, err := (&GatewayService{}).buildKiroPayloadForAccount(
+		context.Background(),
+		account,
+		nil,
+		body,
+		modelID,
+		"kiro-access-token",
+		"claude-opus-5-5",
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-5.5", gjson.GetBytes(buildResult.Payload, "conversationState.currentMessage.userInputMessage.modelId").String())
+}
+
 func TestBuildKiroPayloadForAccountDoesNotEnableThinkingForNonThinkingAlias(t *testing.T) {
 	account := &Account{
 		ID:       9,

@@ -116,6 +116,9 @@ func (s *GatewayService) ForwardAsResponses(
 		anthropicReq.ToolChoice = json.RawMessage(`{"type":"none"}`)
 		// 摘要不需要思考块，省 token 也避免 thinking 与 tool_choice 的组合限制。
 		anthropicReq.Thinking = nil
+		// output_config.effort 同样会让 Kiro 的请求元数据带上 reasoning
+		// billing multiplier；摘要轮次必须与关闭 thinking 的语义一致。
+		anthropicReq.OutputConfig = nil
 		// Codex 的 compact 请求不带 max_output_tokens，会落到转换器的 8192 默认值；
 		// 对覆盖数十万 token 前文的结构化摘要偏紧，容易被截断。
 		if anthropicReq.MaxTokens < compactionMinMaxTokens {
@@ -157,6 +160,11 @@ func (s *GatewayService) ForwardAsResponses(
 
 	var resp *http.Response
 	if isKiroDirectModeAccount(account) {
+		// Kiro receives the converted Anthropic body directly. Preserve the
+		// normalized effort that was actually forwarded, including compaction
+		// adjustments made above, for usage auditing and billing.
+		reasoningEffort = NormalizeClaudeOutputEffort(gjson.GetBytes(anthropicBody, "output_config.effort").String())
+		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, anthropicBody, mappedModel)
 		var group *Group
 		if parsed != nil {
 			group = parsed.Group
@@ -207,9 +215,9 @@ func (s *GatewayService) ForwardAsResponses(
 			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
 				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
 			})
-			reasoningEffort = NormalizeClaudeOutputEffort(gjson.GetBytes(forwardedBody, "output_config.effort").String())
-			reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, forwardedBody, mappedModel)
 		}
+		reasoningEffort = NormalizeClaudeOutputEffort(gjson.GetBytes(forwardedBody, "output_config.effort").String())
+		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, forwardedBody, mappedModel)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
