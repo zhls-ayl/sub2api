@@ -16,6 +16,8 @@ func TestAccountKiroDefaultMappingRestrictsUnsupportedModels(t *testing.T) {
 	require.False(t, account.IsModelSupported("kiro-gpt-4o"))
 	require.False(t, account.IsModelSupported("auto"))
 	require.Equal(t, "claude-sonnet-4.6", account.GetMappedModel("claude-sonnet-4-6"))
+	require.True(t, account.IsModelSupported("claude-opus-5-5"))
+	require.Equal(t, "claude-opus-5.5", account.GetMappedModel("claude-opus-5-5"))
 }
 
 func TestGatewayServiceCalculateTokenCost_KiroAutoUsesConservativeFallback(t *testing.T) {

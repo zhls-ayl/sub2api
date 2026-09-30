@@ -2699,6 +2699,8 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 		"claude-opus-4.7":                     "claude-opus-4.7",
 		"claude-opus-5":                       "claude-opus-5",
 		"claude-opus-5-thinking":              "claude-opus-5",
+		"claude-opus-5-5":                     "claude-opus-5.5",
+		"claude-opus-5.5":                     "claude-opus-5.5",
 		"claude-sonnet-4-6":                   "claude-sonnet-4.6",
 		"claude-sonnet-4-6-thinking":          "claude-sonnet-4.6",
 		"claude-sonnet-4.6":                   "claude-sonnet-4.6",
@@ -2764,6 +2766,23 @@ func TestKiroMaxOutputTokensForOpus5(t *testing.T) {
 
 	require.Equal(t, 128000, kiroMaxOutputTokensForModel("claude-opus-5"))
 	require.Equal(t, 128000, kiroMaxOutputTokensForModel("claude-opus-5-thinking"))
+	require.Equal(t, 128000, kiroMaxOutputTokensForModel("claude-opus-5-5"))
+	require.Equal(t, 128000, kiroMaxOutputTokensForModel("claude-opus-5.5"))
+}
+
+func TestBuildKiroPayloadForOpus55UsesDottedUpstreamModelID(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5-5",
+		"max_tokens":128001,
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	upstreamModel := MapModel("claude-opus-5-5")
+	require.Equal(t, "claude-opus-5.5", upstreamModel)
+	result, err := BuildKiroPayloadWithContext(body, upstreamModel, "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-5.5", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.modelId").String())
+	require.Equal(t, 128000, result.Context.MaxOutputTokens)
 }
 
 func TestIsOutputConfigPathModelSupportsFutureVersions(t *testing.T) {
