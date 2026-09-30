@@ -4388,10 +4388,16 @@ func getString(m map[string]any, key string) string {
 }
 
 func readStopReason(m map[string]any) string {
-	if stop := getString(m, "stop_reason"); stop != "" {
-		return stop
+	stop := getString(m, "stop_reason")
+	if stop == "" {
+		stop = getString(m, "stopReason")
 	}
-	return getString(m, "stopReason")
+	switch strings.ToLower(strings.TrimSpace(stop)) {
+	case "end_turn", "tool_use", "max_tokens", "stop_sequence", "pause_turn", "refusal", "model_context_window_exceeded":
+		return strings.ToLower(strings.TrimSpace(stop))
+	default:
+		return ""
+	}
 }
 
 func toInt(value any) (int, bool) {
