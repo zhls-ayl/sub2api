@@ -699,6 +699,7 @@ func TestKiroMinimumCacheableTokens(t *testing.T) {
 		"claude-opus-4-6-thinking":            4096,
 		"claude-opus-5":                       4096,
 		"claude-opus-5-thinking":              4096,
+		"claude-opus-5-5":                     4096,
 		"claude-opus-4-5-20251101":            4096,
 		"claude-opus-4-5-20251101-thinking":   4096,
 		"claude-sonnet-5":                     1024,
