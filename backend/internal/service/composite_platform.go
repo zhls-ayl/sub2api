@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/adobe"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
@@ -115,6 +116,8 @@ func DetectModelPlatform(model string) (string, bool) {
 			return PlatformDeepseek, true
 		case "minimax":
 			return PlatformMiniMax, true
+		case "typesafe", "jev":
+			return PlatformTypeSafe, true
 		}
 		if rest != "" {
 			normalized = strings.TrimPrefix(rest, "models/")
@@ -175,6 +178,8 @@ func DetectModelPlatform(model string) (string, bool) {
 		strings.HasPrefix(normalized, "abab6"),
 		strings.HasPrefix(normalized, "abab7"):
 		return PlatformMiniMax, true
+	case normalized == "jev-latest" || strings.HasPrefix(normalized, "jev-"):
+		return PlatformTypeSafe, true
 	default:
 		return "", false
 	}
@@ -225,13 +230,7 @@ func (s *GatewayService) resolveCompositeRouteDecision(ctx context.Context, grou
 // kiro 只能通过显式 composite_model_routes 路由行命中：DetectModelPlatform
 // 推断不出 kiro，因为 kiro 的模型名是 claude-* / gpt-*，与 anthropic/openai 冲突。
 func isConcreteRequestPlatform(platform string) bool {
-	switch platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformKiro, PlatformGrok,
-		PlatformAdobe, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
-		return true
-	default:
-		return false
-	}
+	return domain.IsConcretePlatform(platform)
 }
 
 // isGeminiImageSharedName 判定是否 Gemini 官方与 Adobe Firefly 同名的生图模型。

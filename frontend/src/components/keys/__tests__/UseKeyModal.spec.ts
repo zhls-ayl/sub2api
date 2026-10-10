@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { defineComponent, nextTick } from 'vue'
 
 const { copyToClipboardMock, saveAsMock } = vi.hoisted(() => ({
   copyToClipboardMock: vi.fn().mockResolvedValue(true),
@@ -33,6 +33,29 @@ function readBlobAsText(blob: Blob): Promise<string> {
     reader.readAsText(blob)
   })
 }
+
+// 用原生 select 替身驱动 Select 的 v-model，并保留 option 的 disabled 以便断言
+const SelectStub = defineComponent({
+  name: 'SelectStub',
+  props: {
+    modelValue: {
+      type: [String, Number, Boolean, null],
+      default: ''
+    },
+    options: {
+      type: Array,
+      default: () => []
+    }
+  },
+  emits: ['update:modelValue'],
+  template: `
+    <select :value="modelValue" @change="$emit('update:modelValue', $event.target.value)">
+      <option v-for="option in options" :key="option.value" :value="option.value" :disabled="option.disabled">
+        {{ option.label }}
+      </option>
+    </select>
+  `
+})
 
 describe('UseKeyModal', () => {
   afterEach(() => {
@@ -415,7 +438,9 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('image_generation')
     expect(configToml).not.toContain('supports_websockets')
     expect(configToml).not.toContain('responses_websockets_v2')
-    expect(configToml).toContain('[features]\ngoals = true')
+    const features = configToml?.split('[features]\n')[1]?.split('\n[')[0]
+    expect(features).toContain('api_key_model_discovery = true')
+    expect(features).toContain('goals = true')
     expect(configToml).not.toContain('model_reasoning_effort = "xhigh"')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
@@ -557,7 +582,10 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('env_key')
     expect(configToml).not.toContain('image_generation')
     expect(configToml).toContain('supports_websockets = true')
-    expect(configToml).toContain('[features]\nresponses_websockets_v2 = true\ngoals = true')
+    const features = configToml?.split('[features]\n')[1]?.split('\n[')[0]
+    expect(features).toContain('api_key_model_discovery = true')
+    expect(features).toContain('responses_websockets_v2 = true')
+    expect(features).toContain('goals = true')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
   })
@@ -605,7 +633,10 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('env_key')
     expect(configToml).not.toContain('image_generation')
     expect(configToml).toContain('supports_websockets = true')
-    expect(configToml).toContain('[features]\nresponses_websockets_v2 = true\ngoals = true')
+    const features = configToml?.split('[features]\n')[1]?.split('\n[')[0]
+    expect(features).toContain('api_key_model_discovery = true')
+    expect(features).toContain('responses_websockets_v2 = true')
+    expect(features).toContain('goals = true')
     expect(codeBlocks).not.toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).not.toContain('auth.json')
   })
@@ -841,7 +872,8 @@ describe('UseKeyModal', () => {
           },
           Icon: {
             template: '<span />'
-          }
+          },
+          Select: SelectStub
         }
       }
     })
@@ -1012,7 +1044,8 @@ describe('UseKeyModal', () => {
           },
           Icon: {
             template: '<span />'
-          }
+          },
+          Select: SelectStub
         }
       }
     })
@@ -1065,7 +1098,8 @@ describe('UseKeyModal', () => {
         global: {
           stubs: {
             BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
-            Icon: { template: '<span />' }
+            Icon: { template: '<span />' },
+            Select: SelectStub
           }
         }
       })

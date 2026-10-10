@@ -167,7 +167,7 @@
             :class="activeTab === section.platform ? 'channel-tab-active' : 'channel-tab-inactive'"
           >
             <PlatformIcon :platform="section.platform" size="xs" :class="platformTextClass(section.platform)" />
-            <span :class="platformTextClass(section.platform)">{{ t('admin.groups.platforms.' + section.platform, section.platform) }}</span>
+            <span :class="platformTextClass(section.platform)">{{ t('admin.groups.platforms.' + section.platform, catalogPlatformLabel(section.platform)) }}</span>
           </button>
         </div>
 
@@ -247,7 +247,7 @@
                     @change="togglePlatform(p)"
                   />
                   <PlatformIcon :platform="p" size="xs" :class="platformTextClass(p)" />
-                  <span :class="platformTextClass(p)">{{ t('admin.groups.platforms.' + p, p) }}</span>
+                  <span :class="platformTextClass(p)">{{ t('admin.groups.platforms.' + p, catalogPlatformLabel(p)) }}</span>
                 </label>
               </div>
             </div>
@@ -431,9 +431,10 @@
                 <label class="input-label text-xs mb-0">{{ t('admin.channels.form.modelPricing', 'Model Pricing') }}</label>
                 <div class="flex items-center gap-2">
                   <button
+                    v-if="supportsPricingModelSync(section.platform) || isKiroPlatform(section.platform)"
                     type="button"
                     @click="syncLatestModels(sIdx)"
-                    :disabled="syncingPlatform === section.platform"
+                    :disabled="!!syncingPlatform"
                     class="text-xs text-gray-500 hover:text-primary-600 disabled:opacity-50"
                   >
                     {{ syncingPlatform === section.platform ? pricingModelsActionLoadingLabel(section.platform) : pricingModelsActionLabel(section.platform) }}
@@ -645,7 +646,8 @@ import type { PricingFormEntry } from '@/components/admin/channel/types'
 import { apiIntervalsToForm, apiTimePricingToForm, createDefaultTimePricingForm, findModelConflict, formIntervalsToAPI, formReasoningEffortMultipliersToAPI, formTimePricingToAPI, isValidPositiveMultiplier, mTokToPerToken, perTokenToMTok, validateIntervals, validateReasoningEffortMultipliers, validateTimePricing } from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
 import type { Column } from '@/components/common/types'
-import { platformTextClass, platformBadgeLightClass } from '@/utils/platformColors'
+import { platformTextClass, platformBadgeLightClass, platformLabel as catalogPlatformLabel } from '@/utils/platformColors'
+import { listPlatformIds, supportsPricingModelSync } from '@/constants/platformCatalog'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
@@ -772,9 +774,10 @@ const form = reactive({
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'kiro', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go']
+// 平台清单中的全部具体平台（展示顺序）。
+const platformOrder = computed<GroupPlatform[]>(() => listPlatformIds())
 // Composite pricing/mapping may target every concrete schedulable provider.
-const compositePlatforms: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'kiro', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go']
+const compositePlatforms = platformOrder
 
 // ── Helpers ──
 function formatDate(value: string): string {
@@ -814,7 +817,7 @@ function togglePlatform(platform: GroupPlatform) {
 
 function getGroupsForPlatform(platform: GroupPlatform): AdminGroup[] {
   return allGroups.value.filter(
-    g => g.platform === platform || (g.platform === 'composite' && compositePlatforms.includes(platform))
+    g => g.platform === platform || (g.platform === 'composite' && compositePlatforms.value.includes(platform))
   )
 }
 
@@ -910,8 +913,11 @@ function pricingModelsActionLoadingLabel(platform: string): string {
 }
 
 async function syncLatestModels(sectionIdx: number) {
-  const platform = form.platforms[sectionIdx].platform
-  if (syncingPlatform.value) return
+  const section = form.platforms[sectionIdx]
+  // kiro 无定价目录 provider，但走 fork 专属的“填充默认模型”入口。
+  if (!section || syncingPlatform.value) return
+  if (!supportsPricingModelSync(section.platform) && !isKiroPlatform(section.platform)) return
+  const platform = section.platform
   syncingPlatform.value = platform
   try {
     if (isKiroPlatform(platform)) {
@@ -922,7 +928,7 @@ async function syncLatestModels(sectionIdx: number) {
     const result = await adminAPI.channels.syncPricingModels(platform)
     // Collect all model names already present in this platform's pricing entries
     const existingModels = new Set<string>()
-    for (const entry of form.platforms[sectionIdx].model_pricing) {
+    for (const entry of section.model_pricing) {
       for (const m of entry.models) existingModels.add(m)
     }
     const newModels = result.models.filter(m => !existingModels.has(m))
@@ -1263,7 +1269,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
   for (const gid of channel.group_ids || []) {
     const p = groupPlatformMap.get(gid)
     if (p === 'composite') {
-      compositePlatforms.forEach(platform => activePlatforms.add(platform))
+      compositePlatforms.value.forEach(platform => activePlatforms.add(platform))
     } else if (p) {
       activePlatforms.add(p)
     }
@@ -1272,18 +1278,18 @@ function apiToForm(channel: Channel): PlatformSection[] {
     if (p.platform) activePlatforms.add(p.platform as GroupPlatform)
   }
   for (const p of Object.keys(channel.model_mapping || {})) {
-    if (platformOrder.includes(p as GroupPlatform)) activePlatforms.add(p as GroupPlatform)
+    if (platformOrder.value.includes(p as GroupPlatform)) activePlatforms.add(p as GroupPlatform)
   }
 
   // Build sections in platform order
   const sections: PlatformSection[] = []
-  for (const platform of platformOrder) {
+  for (const platform of platformOrder.value) {
     if (!activePlatforms.has(platform)) continue
 
     const groupIds = (channel.group_ids || []).filter(gid => {
       const groupPlatform = groupPlatformMap.get(gid)
       return groupPlatform === platform ||
-        (groupPlatform === 'composite' && compositePlatforms.includes(platform))
+        (groupPlatform === 'composite' && compositePlatforms.value.includes(platform))
     })
     const mapping = (channel.model_mapping || {})[platform] || {}
     const pricing = (channel.model_pricing || [])
@@ -1544,14 +1550,14 @@ async function handleSubmit() {
   // Check for pricing entries with empty models (would be silently skipped)
   for (const section of form.platforms.filter(s => s.enabled)) {
     if (section.group_ids.length === 0) {
-      const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+      const platformLabel = t('admin.groups.platforms.' + section.platform, catalogPlatformLabel(section.platform))
       appStore.showError(t('admin.channels.noGroupsSelected', { platform: platformLabel }))
       activeTab.value = section.platform
       return
     }
     for (const entry of section.model_pricing) {
       if (entry.models.length === 0) {
-        const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+        const platformLabel = t('admin.groups.platforms.' + section.platform, catalogPlatformLabel(section.platform))
         appStore.showError(t('admin.channels.emptyModelsInPricing', { platform: platformLabel }))
         activeTab.value = section.platform
         return
@@ -1612,7 +1618,7 @@ async function handleSubmit() {
     for (const entry of entries) {
       const error = validateReasoningEffortMultipliers(entry.reasoning_effort_multipliers, t)
       if (!error) continue
-      const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+      const platformLabel = t('admin.groups.platforms.' + section.platform, catalogPlatformLabel(section.platform))
       const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
       appStore.showError(`${platformLabel} - ${modelLabel}: ${error}`)
       activeTab.value = section.platform
@@ -1625,7 +1631,7 @@ async function handleSubmit() {
     for (const entry of section.model_pricing) {
       if (!isValidPositiveMultiplier(entry.fast_multiplier) ||
           !isValidPositiveMultiplier(entry.flex_multiplier)) {
-        const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+        const platformLabel = t('admin.groups.platforms.' + section.platform, catalogPlatformLabel(section.platform))
         const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
         appStore.showError(`${platformLabel} - ${modelLabel}: ${t('admin.channels.form.multiplierPositive')}`)
         activeTab.value = section.platform
@@ -1634,7 +1640,7 @@ async function handleSubmit() {
       if (!entry.intervals || entry.intervals.length === 0) continue
       const intervalErr = validateIntervals(entry.intervals, entry.billing_mode, t)
       if (intervalErr) {
-        const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+        const platformLabel = t('admin.groups.platforms.' + section.platform, catalogPlatformLabel(section.platform))
         const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
         appStore.showError(`${platformLabel} - ${modelLabel}: ${intervalErr}`)
         activeTab.value = section.platform
@@ -1648,7 +1654,7 @@ async function handleSubmit() {
     for (const entry of section.model_pricing) {
       const timePricingError = validateTimePricing(entry.time_pricing, t)
       if (timePricingError) {
-        const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+        const platformLabel = t('admin.groups.platforms.' + section.platform, catalogPlatformLabel(section.platform))
         const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
         appStore.showError(`${platformLabel} - ${modelLabel}: ${timePricingError}`)
         activeTab.value = section.platform

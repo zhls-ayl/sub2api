@@ -250,14 +250,14 @@ describe('ChannelsView 弹框布局', () => {
 
     const kiroPlatformLabel = wrapper
       .findAll('label')
-      .find((label) => label.text().includes('kiro'))
+      .find((label) => label.text().toLowerCase().includes('kiro'))
     expect(kiroPlatformLabel).toBeTruthy()
     await kiroPlatformLabel!.find('input[type="checkbox"]').setValue(true)
     await flushPromises()
 
     const kiroTab = wrapper
       .findAll('button')
-      .find((button) => button.text().includes('kiro'))
+      .find((button) => button.text().toLowerCase().includes('kiro'))
     expect(kiroTab).toBeTruthy()
     await kiroTab!.trigger('click')
     await flushPromises()

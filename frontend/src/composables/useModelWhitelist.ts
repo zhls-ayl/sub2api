@@ -1,3 +1,5 @@
+import { getProviderProfile } from '@/constants/platformCatalog'
+
 // =====================
 // 模型列表（硬编码，与 new-api 一致）
 // =====================
@@ -145,6 +147,8 @@ const kiroModels = [
   'claude-opus-5-5-thinking',
   'claude-sonnet-5',
   'claude-sonnet-5-thinking',
+  'claude-sonnet-5-5',
+  'claude-sonnet-5-5-thinking',
   'claude-sonnet-4-6',
   'claude-sonnet-4-6-thinking',
   'claude-opus-4-5-20251101',
@@ -500,6 +504,8 @@ const kiroPresetMappings = [
   { label: 'Opus 5.5 Thinking', from: 'claude-opus-5-5-thinking', to: 'claude-opus-5.5', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Sonnet 5 Thinking', from: 'claude-sonnet-5-thinking', to: 'claude-sonnet-5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
+  { label: 'Sonnet 5.5', from: 'claude-sonnet-5-5', to: 'claude-sonnet-5.5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
+  { label: 'Sonnet 5.5 Thinking', from: 'claude-sonnet-5-5-thinking', to: 'claude-sonnet-5.5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'claude-sonnet-4.6', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Sonnet 4.6 Thinking', from: 'claude-sonnet-4-6-thinking', to: 'claude-sonnet-4.6', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Opus 4.5', from: 'claude-opus-4-5-20251101', to: 'claude-opus-4.5', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-300' },
@@ -608,13 +614,17 @@ export function getModelsByPlatform(platform: string): string[] {
       'qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-plus',
       'hy4-preview', 'hy3', 'omen-alpha'
     ]
+    case 'typesafe': return ['jev-latest']
     case 'doubao': return doubaoModels
     case 'minimax': return minimaxModels
     case 'baidu': return baiduModels
     case 'spark': return sparkModels
     case 'hunyuan': return hunyuanModels
     case 'perplexity': return perplexityModels
-    default: return claudeModels
+    default:
+      // 平台清单中没有内置模型列表的多协议供应商（多为多模型聚合平台，模型多且常变）
+      // 默认不预填白名单：预填 Claude 模型会让新账号只接受这些模型。
+      return getProviderProfile(platform) ? [] : claudeModels
   }
 }
 
@@ -680,6 +690,10 @@ const kiroKnownUpstreamIDs: Record<string, string> = {
   'claude-opus-5.5-thinking': 'claude-opus-5.5',
   'claude-sonnet-5': 'claude-sonnet-5',
   'claude-sonnet-5-thinking': 'claude-sonnet-5',
+  'claude-sonnet-5-5': 'claude-sonnet-5.5',
+  'claude-sonnet-5-5-thinking': 'claude-sonnet-5.5',
+  'claude-sonnet-5.5': 'claude-sonnet-5.5',
+  'claude-sonnet-5.5-thinking': 'claude-sonnet-5.5',
   'claude-sonnet-4-6': 'claude-sonnet-4.6',
   'claude-sonnet-4-6-thinking': 'claude-sonnet-4.6',
   'claude-sonnet-4.6': 'claude-sonnet-4.6',

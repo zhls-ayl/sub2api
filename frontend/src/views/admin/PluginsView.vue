@@ -409,6 +409,7 @@ async function acceptConfirm(): Promise<void> {
 const iframeHeight = ref(640);
 const pluginFrameLoaded = ref(false);
 const pendingBridgeRequests = new Map<string, number>();
+let uiSessionVersion = 0;
 
 function errorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -579,6 +580,7 @@ async function testPlugin(plugin: PluginInstallation): Promise<void> {
 }
 
 async function openConfiguration(plugin: PluginInstallation): Promise<void> {
+  const version = ++uiSessionVersion;
   configPlugin.value = plugin;
   uiSession.value = null;
   pluginFrameLoaded.value = false;
@@ -587,14 +589,18 @@ async function openConfiguration(plugin: PluginInstallation): Promise<void> {
   uiError.value = "";
   iframeHeight.value = 640;
   try {
-    uiSession.value = await adminAPI.plugins.createUISession(plugin.id);
+    const session = await adminAPI.plugins.createUISession(plugin.id);
+    if (version !== uiSessionVersion) return;
+    uiSession.value = session;
   } catch (error: unknown) {
+    if (version !== uiSessionVersion) return;
     uiLoading.value = false;
     uiError.value = errorMessage(error);
   }
 }
 
 function closeConfiguration(): void {
+  uiSessionVersion++;
   clearPendingBridgeRequests();
   pluginFrameLoaded.value = false;
   configPlugin.value = null;
@@ -779,6 +785,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("message", handleBridgeMessage);
-  clearPendingBridgeRequests();
+  closeConfiguration();
 });
 </script>

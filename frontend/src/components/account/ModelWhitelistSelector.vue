@@ -155,6 +155,7 @@ import { useClipboard } from '@/composables/useClipboard'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { allModels, getModelsByPlatform, kiroUpstreamIDsFromMetadata } from '@/composables/useModelWhitelist'
+import { supportsUpstreamModelSync } from '@/constants/platformCatalog'
 
 const { t } = useI18n()
 
@@ -211,25 +212,14 @@ const normalizedPlatforms = computed(() => {
   )
 })
 
-const upstreamSyncPlatforms = new Set([
-  'anthropic',
-  'openai',
-  'gemini',
-  'antigravity',
-  'grok',
-  'kimi',
-  'zhipu',
-  'deepseek',
-  'minimax',
-  'opencode_go',
-  'adobe',
-  'kiro'
-])
-// Adobe 只有 API Key 中转号（base_url + api_key）能拉上游 /v1/models；Cookie 号没有静态 Key。
+// 清单驱动的通用判断（多协议供应商 + anthropic/openai/gemini/antigravity/grok），
+// 再加上 fork 定制的 kiro（relay）与 adobe（仅 API Key 中转号）上游模型同步。
 const isUpstreamSyncable = (platform: string, type: string | undefined) => {
   const normalized = platform.toLowerCase()
-  if (!upstreamSyncPlatforms.has(normalized)) return false
-  return normalized !== 'adobe' || type === 'apikey'
+  if (supportsUpstreamModelSync(normalized)) return true
+  if (normalized === 'kiro') return true
+  // Adobe 只有 API Key 中转号（base_url + api_key）能拉上游 /v1/models；Cookie 号没有静态 Key。
+  return normalized === 'adobe' && type === 'apikey'
 }
 const canSyncUpstream = computed(() => {
   if (!props.allowUpstreamSync) return false
@@ -327,8 +317,7 @@ const fillRelated = () => {
 }
 
 const syncUpstreamModels = async () => {
-  if (isSyncingUpstream.value) return
-  if (!props.accountId && !props.syncCredentials) return
+  if (isSyncingUpstream.value || !canSyncUpstream.value) return
 
   isSyncingUpstream.value = true
   try {

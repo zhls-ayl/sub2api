@@ -1,19 +1,20 @@
 package migrations
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/stretchr/testify/require"
 )
 
 // expectedUserPlatformQuotaPlatforms 是 user_platform_quotas.platform 允许的平台集合，
-// 需与 service.AllowedQuotaPlatforms 及 ent/schema/user_platform_quota.go 的 Validate 同步。
-// 此处硬编码而非 import service：migrations 是叶子包，被 repository 依赖，反向 import 会成环。
+// 需与 domain.ConcretePlatformIDs 及 ent/schema/user_platform_quota.go 的 Validate 同步。
+// 242 号迁移起白名单改由应用层平台清单校验，不再维护数据库 CHECK 约束。
 var expectedUserPlatformQuotaPlatforms = []string{
-	"adobe", "anthropic", "antigravity", "deepseek", "gemini", "grok", "kimi", "kiro", "minimax", "openai", "opencode_go", "zhipu",
+	"adobe", "anthropic", "antigravity", "cline", "command_code", "deepseek", "gemini",
+	"grok", "kimi", "kiro", "minimax", "openai", "opencode_go", "typesafe", "zhipu",
 }
 
 // TestUserPlatformQuotasRestoreKiroMigration 校验 227 号迁移把 224 漏掉的 kiro
@@ -33,50 +34,14 @@ func TestUserPlatformQuotasRestoreKiroMigration(t *testing.T) {
 }
 
 // TestUserPlatformQuotaPlatformCheckFinalStateCoversAllPlatforms 是防回归护栏：
-// 按文件名顺序（= 迁移执行顺序）取最后一个重建 user_platform_quotas_platform_check
-// 的迁移，断言其平台列表覆盖全部允许平台。
-//
-// 224 的事故根因是 DROP + 重建时手抄平台列表漏了一项，而针对 224 自身的用例只断言
-// 「新增的 kimi/zhipu/deepseek 在列表里」，无法发现旧平台被删。此用例校验终态，
-// 任何后续重建该约束却漏平台的迁移都会在这里失败。
+// 242 号迁移把 user_platform_quotas.platform 白名单从数据库 CHECK 约束改为应用层
+// 平台清单校验（domain.ConcretePlatformIDs），断言清单覆盖全部允许平台（含 fork 的
+// kiro/adobe），漏项会让对应平台的配额行插入失败。
 func TestUserPlatformQuotaPlatformCheckFinalStateCoversAllPlatforms(t *testing.T) {
-	entries, err := FS.ReadDir(".")
-	require.NoError(t, err)
-
-	var touching []string
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".sql") {
-			continue
-		}
-		body, readErr := FS.ReadFile(name)
-		require.NoError(t, readErr)
-		if strings.Contains(string(body), "user_platform_quotas_platform_check") {
-			touching = append(touching, name)
-		}
-	}
-	require.NotEmpty(t, touching, "no migration touches user_platform_quotas_platform_check")
-	sort.Strings(touching) // 与 ApplyMigrations 的执行顺序一致
-	last := touching[len(touching)-1]
-
-	body, err := FS.ReadFile(last)
-	require.NoError(t, err)
-	normalized := strings.Join(strings.Fields(string(body)), " ")
-
-	// 取该文件里最后一处 CHECK (platform IN (...))，即约束终态。
-	checkRe := regexp.MustCompile(`CHECK \(platform IN \(([^)]*)\)\)`)
-	matches := checkRe.FindAllStringSubmatch(normalized, -1)
-	require.NotEmpty(t, matches, "migration %s rebuilds the constraint but has no CHECK (platform IN (...))", last)
-
-	var got []string
-	for _, raw := range strings.Split(matches[len(matches)-1][1], ",") {
-		if v := strings.Trim(strings.TrimSpace(raw), "'"); v != "" {
-			got = append(got, v)
-		}
-	}
+	got := append([]string{}, domain.ConcretePlatformIDs()...)
 	sort.Strings(got)
 
 	require.Equal(t, expectedUserPlatformQuotaPlatforms, got,
-		"migration %s 定义的平台列表与 service.AllowedQuotaPlatforms 不一致；"+
-			"重建 CHECK 约束时必须列出全部允许平台，漏项会让对应平台的配额行插入失败", last)
+		"domain.ConcretePlatformIDs 与 user_platform_quotas.platform 允许的平台不一致；"+
+			"新平台必须登记进 domain/platforms.go，漏项会让对应平台的配额行插入失败")
 }

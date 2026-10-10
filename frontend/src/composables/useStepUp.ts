@@ -68,25 +68,31 @@ export function useStepUp() {
   const visible = ref(false)
   const blockedReason = ref<string>('')
   let resolver: ((ok: boolean) => void) | null = null
+  let pendingPrompt: Promise<boolean> | null = null
 
   /** Open the TOTP dialog and resolve true once a grant is obtained. */
-  function openDialog(): Promise<boolean> {
+  // 命名避开浏览器全局 prompt()：nativeControls.spec 按函数名扫描原生对话框 API。
+  function promptForGrant(): Promise<boolean> {
+    if (pendingPrompt) return pendingPrompt
     visible.value = true
-    return new Promise<boolean>((resolve) => {
+    pendingPrompt = new Promise<boolean>((resolve) => {
       resolver = resolve
     })
+    return pendingPrompt
   }
 
   function onVerified() {
     visible.value = false
     resolver?.(true)
     resolver = null
+    pendingPrompt = null
   }
 
   function onCancel() {
     visible.value = false
     resolver?.(false)
     resolver = null
+    pendingPrompt = null
   }
 
   /**
@@ -107,7 +113,7 @@ export function useStepUp() {
       if (!isStepUpRequired(err)) {
         throw err
       }
-      const ok = await openDialog()
+      const ok = await promptForGrant()
       if (!ok) {
         throw new StepUpCancelledError()
       }
@@ -119,7 +125,7 @@ export function useStepUp() {
   return {
     visible,
     blockedReason,
-    prompt: openDialog,
+    prompt: promptForGrant,
     onVerified,
     onCancel,
     run
