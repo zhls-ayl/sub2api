@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -320,6 +321,48 @@ func TestForwardAsChatCompletions_KiroCacheEmulation(t *testing.T) {
 	require.Contains(t, responseBody, `"prompt_tokens_details"`)
 	require.Contains(t, responseBody, `"cached_tokens"`)
 	require.Contains(t, responseBody, `"cache_creation_tokens"`)
+}
+
+func TestForwardAsChatCompletions_KiroDirectPreservesReasoningEffort(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, stream := range []bool{false, true} {
+		mode := "buffered"
+		if stream {
+			mode = "streaming"
+		}
+		t.Run(mode, func(t *testing.T) {
+			body := kiroChatCompletionsConversationBody([]string{"reasoning effort must be audited"})
+			body = append(append([]byte{}, body[:len(body)-1]...), []byte(`,"reasoning_effort":"high","stream":`+fmt.Sprint(stream)+`}`)...)
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+				Body:       io.NopCloser(bytes.NewReader(kiroChatTestEventStream(t, "ok", 10, 2))),
+			}}
+			service := &GatewayService{
+				httpUpstream:        upstream,
+				kiroCooldownStore:   noopKiroChatCooldownStore{},
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+			}
+			account := &Account{
+				ID: 802, Platform: PlatformKiro, Type: AccountTypeAPIKey, Concurrency: 1,
+				Credentials: map[string]any{
+					"api_key":       "ksk_test",
+					"model_mapping": map[string]any{"gpt-5": "claude-sonnet-4-6"},
+				},
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			result, err := service.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{Group: kiroCacheGroup(1)})
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, result.ReasoningEffort)
+			require.Equal(t, "high", *result.ReasoningEffort)
+		})
+	}
 }
 
 type noopKiroChatCooldownStore struct{}

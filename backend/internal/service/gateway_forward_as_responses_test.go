@@ -77,6 +77,80 @@ func TestForwardAsResponsesKiroDirectUsesResponsesCacheProfile(t *testing.T) {
 	require.Len(t, upstream.requests, 2)
 }
 
+func TestForwardAsResponsesKiroDirectPreservesForwardedReasoningEffort(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, stream := range []bool{false, true} {
+		mode := "buffered"
+		if stream {
+			mode = "streaming"
+		}
+		t.Run(mode, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"model":     "gpt-5",
+				"input":     "preserve the converted reasoning effort",
+				"reasoning": map[string]string{"effort": "xhigh"},
+				"stream":    stream,
+			})
+			require.NoError(t, err)
+
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{kiroResponsesCacheUpstreamResponse(t, 2)}}
+			svc := &GatewayService{
+				cfg:          &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+				httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+				tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+			}
+			account := &Account{
+				ID: 302, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token": "kiro-access-token",
+					"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/REASONING",
+				},
+			}
+			c, _ := newResponsesGatewayTestContext()
+			result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{Group: kiroCacheGroup(1)})
+			require.NoError(t, err)
+			require.Len(t, upstream.requests, 1)
+			require.NotNil(t, result.ReasoningEffort)
+			require.Equal(t, "max", *result.ReasoningEffort)
+		})
+	}
+}
+
+func TestForwardAsResponsesKiroDirectCompactionClearsReasoningEffort(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"gpt-5",
+		"reasoning":{"effort":"xhigh"},
+		"input":[
+			{"type":"message","role":"user","content":"summarize this context"},
+			{"type":"compaction_trigger"}
+		]
+	}`)
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{kiroResponsesCacheUpstreamResponse(t, 2)}}
+	svc := &GatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream: upstream, kiroCooldownStore: &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{}, rateLimitService: &RateLimitService{},
+	}
+	account := &Account{
+		ID: 303, Platform: PlatformKiro, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-access-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/COMPACTION",
+		},
+	}
+	c, _ := newResponsesGatewayTestContext()
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{Group: kiroCacheGroup(1)})
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	require.Nil(t, result.ReasoningEffort)
+	forwardedBody, err := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, err)
+	require.NotContains(t, string(forwardedBody), "thinking")
+	require.NotContains(t, string(forwardedBody), "effort")
+}
+
 func newResponsesGatewayTestContext() (*gin.Context, *httptest.ResponseRecorder) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
