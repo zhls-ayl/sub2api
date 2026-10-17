@@ -266,11 +266,43 @@ func TestKiroCacheEmulationPrefixPartialHit(t *testing.T) {
 	}
 }
 
+// 计量算法切换只改口径：charclass/weighted 在 CJK 流量上应高于官方计数，
+// 且三条协议路径共用的缓存 profile 归一化不因算法改变（最后断点仍映射 totalInputTokens）。
+func TestKiroInputTokenEstimateInflatesUnderAlternativeAlgorithms(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","system":"你是一个专业的编程助手。","messages":[{"role":"user","content":"这是一段用于验证计量口径的中文请求内容。"}]}`)
+	official := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, body)
+	charclass := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmCharClass, body)
+	weighted := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmWeighted, body)
+	if official <= 0 {
+		t.Fatalf("official estimate = %d, want > 0", official)
+	}
+	if charclass <= official {
+		t.Fatalf("charclass estimate %d should exceed official %d on CJK payload", charclass, official)
+	}
+	if weighted <= official {
+		t.Fatalf("weighted estimate %d should exceed official %d on CJK payload", weighted, official)
+	}
+
+	for _, alg := range []anthropictokenizer.Algorithm{anthropictokenizer.AlgorithmCharClass, anthropictokenizer.AlgorithmWeighted} {
+		profile, ok := buildKiroCacheProfile(context.Background(), alg, body, "claude-sonnet-4-6", estimateKiroInputTokens(context.Background(), alg, body))
+		if !ok {
+			continue
+		}
+		last := profile.lastCacheableBreakpoint()
+		if last == nil {
+			continue
+		}
+		if got := profile.cacheTokensForBreakpoint(last.cumulativeTokens); got != profile.totalInputTokens {
+			t.Fatalf("algorithm %s: normalized last breakpoint = %d, want totalInputTokens %d", alg, got, profile.totalInputTokens)
+		}
+	}
+}
+
 func TestKiroInputTokenEstimateIgnoresClientMetadata(t *testing.T) {
 	bodyWithoutMetadata := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello world"}]}`)
 	bodyWithMetadata := []byte(`{"model":"claude-sonnet-4-6","metadata":{"input_tokens":999999},"messages":[{"role":"user","content":"hello world"}]}`)
-	withoutMetadata := estimateKiroInputTokens(context.Background(), bodyWithoutMetadata)
-	withMetadata := estimateKiroInputTokens(context.Background(), bodyWithMetadata)
+	withoutMetadata := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, bodyWithoutMetadata)
+	withMetadata := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, bodyWithMetadata)
 	if withMetadata == 999999 {
 		t.Fatal("client metadata.input_tokens must not be trusted")
 	}
@@ -289,13 +321,13 @@ func TestKiroTokenCountersMatchReferenceRules(t *testing.T) {
 	if kiroTokensPerTool != 150 {
 		t.Fatalf("tool tokens = %d, want 150", kiroTokensPerTool)
 	}
-	if got := countKiroMessageContentTokens(context.Background(), map[string]any{"thinking": "abc def"}); got != 1 {
+	if got := countKiroMessageContentTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, map[string]any{"thinking": "abc def"}); got != 1 {
 		t.Fatalf("thinking tokens = %d, want 1", got)
 	}
-	if got := countKiroMessageContentTokens(context.Background(), map[string]any{"input": map[string]any{"path": "/tmp/a.txt"}}); got <= 0 {
+	if got := countKiroMessageContentTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, map[string]any{"input": map[string]any{"path": "/tmp/a.txt"}}); got <= 0 {
 		t.Fatalf("tool input tokens should be positive, got %d", got)
 	}
-	if got := countKiroMessageContentTokens(context.Background(), map[string]any{"content": []any{map[string]any{"text": "abc"}, map[string]any{"text": "你好"}}}); got != 2 {
+	if got := countKiroMessageContentTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, map[string]any{"content": []any{map[string]any{"text": "abc"}, map[string]any{"text": "你好"}}}); got != 2 {
 		t.Fatalf("tool result content tokens = %d, want 2", got)
 	}
 }
@@ -320,7 +352,7 @@ func TestKiroInputTokenEstimateSeparatesVisualTokensFromBase64(t *testing.T) {
 		t.Fatalf("image tokens = %d, want 350", imageTokens)
 	}
 
-	got := estimateKiroInputTokens(context.Background(), body)
+	got := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, body)
 	want := anthropictokenizer.CountTokens("describe") + imageTokens
 	if got < want || got > want+50 {
 		t.Fatalf("input token estimate = %d, expected visual-aware estimate near %d", got, want)
@@ -336,7 +368,7 @@ func TestKiroImageTokenSourcesSupportAnthropicAndOpenAIShapes(t *testing.T) {
 		{"type": "input_image", "image_url": dataURL},
 	}
 	for _, block := range tests {
-		if got := countKiroMessageContentTokens(context.Background(), block); got != 54 {
+		if got := countKiroMessageContentTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, block); got != 54 {
 			t.Fatalf("image block %#v tokens = %d, want 54", block, got)
 		}
 	}
@@ -349,7 +381,7 @@ func TestKiroCacheEmulationIncludesImageTokensAndKeepsImageFingerprint(t *testin
 	group := kiroCacheGroup(1)
 	prefix := strings.Repeat("cacheable visual prompt ", 700)
 	body := kiroCacheImageRequestBody(t, prefix, color.RGBA{R: 1, A: 255})
-	inputTokens := estimateKiroInputTokens(context.Background(), body)
+	inputTokens := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, body)
 
 	first := svc.buildKiroCacheEmulationUsage(context.Background(), account, group, body, "claude-sonnet-4-6", inputTokens)
 	if first == nil || first.CacheCreationInputTokens <= 0 || first.CacheReadInputTokens != 0 {
@@ -368,7 +400,7 @@ func TestKiroCacheEmulationIncludesImageTokensAndKeepsImageFingerprint(t *testin
 	}
 
 	changedBody := kiroCacheImageRequestBody(t, prefix, color.RGBA{G: 1, A: 255})
-	changedTokens := estimateKiroInputTokens(context.Background(), changedBody)
+	changedTokens := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, changedBody)
 	changed := svc.buildKiroCacheEmulationUsage(context.Background(), account, group, changedBody, "claude-sonnet-4-6", changedTokens)
 	if changed == nil || changed.CacheReadInputTokens != 0 || changed.CacheCreationInputTokens <= 0 {
 		t.Fatalf("different image must miss cache: %+v", changed)
@@ -822,7 +854,7 @@ func TestKiroCacheEmulationOpusShortRequestWithToolsIsCacheable(t *testing.T) {
 	group := kiroCacheGroup(1)
 	body := kiroToolHeavyShortRequestBody()
 
-	inputTokens := estimateKiroInputTokens(context.Background(), body)
+	inputTokens := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, body)
 	first := svc.buildKiroCacheEmulationUsage(context.Background(), account, group, body, "claude-opus-4-8", inputTokens)
 	require.NotNil(t, first, "opus short request with real-sized tools must be cacheable")
 	require.Positive(t, first.CacheCreationInputTokens)
@@ -939,7 +971,7 @@ func TestKiroCacheEmulationSteadyStateHitRateMeetsTarget(t *testing.T) {
 	var aggregateRead, aggregateTotal int
 	for turn := 1; turn <= totalTurns; turn++ {
 		body := kiroClaudeCodeConversationBody(turn)
-		inputTokens := estimateKiroInputTokens(context.Background(), body)
+		inputTokens := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, body)
 		usage := svc.buildKiroCacheEmulationUsage(context.Background(), account, group, body, "claude-sonnet-4-6", inputTokens)
 		require.NotNil(t, usage, "turn %d: cache emulation must produce usage", turn)
 

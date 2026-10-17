@@ -1811,6 +1811,39 @@ describe('EditAccountModal', () => {
     expect(extra).not.toHaveProperty('kiro_credit_unit_price_usd')
   })
 
+  it('hydrates and submits Leonardo cookie image limits in extra', async () => {
+    const account = {
+      ...buildGrokOAuthAccount(),
+      id: 12,
+      name: 'Leonardo Cookie',
+      platform: 'leonardo',
+      credentials: {},
+      extra: { leonardo_max_quality: 'high', leonardo_max_short_edge: 1536, leonardo_max_upscale_factor: 1.5 }
+    } as any
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const quality = wrapper.get<HTMLSelectElement>('[data-testid="leonardo-max-quality"]')
+    const shortEdge = wrapper.get<HTMLInputElement>('[data-testid="leonardo-max-short-edge"]')
+    const factor = wrapper.get<HTMLInputElement>('[data-testid="leonardo-max-upscale-factor"]')
+    expect(quality.element.value).toBe('high')
+    expect(shortEdge.element.value).toBe('1536')
+    expect(factor.element.value).toBe('1.5')
+
+    await quality.setValue('medium')
+    await shortEdge.setValue('1024')
+    await factor.setValue('2')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(extra).toMatchObject({
+      leonardo_max_quality: 'medium',
+      leonardo_max_short_edge: 1024,
+      leonardo_max_upscale_factor: 2
+    })
+  })
+
   it('does not show the Leonardo credit unit price for relay accounts', () => {
     const account = {
       ...buildGrokAPIKeyAccount(),
@@ -1822,6 +1855,7 @@ describe('EditAccountModal', () => {
     const wrapper = mountModal(account)
 
     expect(wrapper.find('[data-testid="leonardo-credit-unit-price-usd"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="leonardo-image-limits"]').exists()).toBe(false)
   })
 
   it('allows saving apikey account when backend redacted api_key but credentials_status reports it exists', async () => {

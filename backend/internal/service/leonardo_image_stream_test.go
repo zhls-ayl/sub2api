@@ -1,7 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"image"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -137,10 +141,53 @@ func TestLeonardoGenerateCallEstimatesUsage(t *testing.T) {
 }
 
 func TestLeonardoImageUsage(t *testing.T) {
-	require.Nil(t, leonardoImageUsage("gpt-image-2", "cat", 8, 0), "比例为 0 不返回 usage")
-	require.Nil(t, leonardoImageUsage("gpt-image-2", "cat", 0, 34), "积分未知不返回 usage")
-	usage := leonardoImageUsage("gpt-image-2", "", 137, 34)
+	require.Nil(t, leonardoImageUsage("gpt-image-2", "cat", 8, 0, 1), "比例为 0 不返回 usage")
+	require.Nil(t, leonardoImageUsage("gpt-image-2", "cat", 0, 34, 1), "积分未知不返回 usage")
+	usage := leonardoImageUsage("gpt-image-2", "", 137, 34, 1)
 	require.Equal(t, int64(4658), gjson.GetBytes(usage, "output_tokens").Int())
 	require.Equal(t, int64(0), gjson.GetBytes(usage, "input_tokens").Int())
 	require.Equal(t, int64(0), gjson.GetBytes(usage, "input_tokens_details.image_tokens").Int())
+}
+
+// 账号设了质量与尺寸上限：按上限出图（1024² MEDIUM），本地等比超分回客户尺寸
+// （2048²）；回显请求档位，按交付尺寸计费，usage 按尺寸与质量倍数折回，积分如实记录。
+func TestLeonardoGenerateCallAppliesAccountImageLimits(t *testing.T) {
+	upstream := newFakeLeonardoUpstream(t)
+	upstream.image = encodeTestJPEG(t, 1024, 1024, 90)
+	account := &Account{ID: 89, Platform: PlatformLeonardo, Type: AccountTypeOAuth, Credentials: map[string]any{"cookie": "c"}, Extra: map[string]any{
+		"leonardo_max_quality":    "medium",
+		"leonardo_max_short_edge": 1024,
+	}}
+	call := NewLeonardoImageCall(&OpenAIImagesRequest{
+		Model: "gpt-image-2", Prompt: "an apple", Quality: "high", Size: "2048x2048",
+	}, "")
+	call.UsageTokensPerCredit = 34
+
+	result, err := upstream.imageService().GenerateCall(context.Background(), account, "jwt", call)
+	require.NoError(t, err)
+
+	upstream.mu.Lock()
+	params, _ := upstream.gen["parameters"].(map[string]any)
+	upstream.mu.Unlock()
+	require.EqualValues(t, 1024, params["width"])
+	require.EqualValues(t, 1024, params["height"])
+	require.Equal(t, "MEDIUM", params["quality"])
+
+	b64 := gjson.GetBytes(result.Body, "data.0.b64_json").String()
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	require.NoError(t, err)
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(decoded))
+	require.NoError(t, err)
+	require.Equal(t, []any{2048, 2048, "jpeg"}, []any{cfg.Width, cfg.Height, format})
+
+	require.Equal(t, "2048x2048", result.Size)
+	require.Equal(t, "2048x2048", gjson.GetBytes(result.Body, "size").String())
+	require.Equal(t, "high", result.Quality)
+	require.Equal(t, "2K", result.Forward.ImageSize)
+	require.Equal(t, 8.0, result.Forward.Usage.KiroCredits, "积分记实扣值，不放大")
+
+	// 8 积分 × 34 × 交付/出图像素 4 × HIGH/MEDIUM 质量倍数 4160/1056。
+	wantTokens := int(math.Round(8 * 34 * 4 * (4160.0 / 1056.0)))
+	require.Equal(t, int64(wantTokens), gjson.GetBytes(result.Body, "usage.output_tokens").Int())
+	require.Equal(t, wantTokens, result.Forward.Usage.OutputTokens)
 }

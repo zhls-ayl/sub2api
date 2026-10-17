@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -3310,6 +3312,93 @@ func TestMapModel_ReturnsEmptyForUnsupportedModels(t *testing.T) {
 			t.Fatalf("MapModel(%q) = %q, want empty string", input, got)
 		}
 	}
+}
+
+// 计量算法只影响输出 token 兜底估算的口径；max_tokens 截断始终用官方算法。
+func TestParseNonStreamingEventStreamOutputEstimateFollowsTokenizerAlgorithm(t *testing.T) {
+	buildStream := func() *bytes.Buffer {
+		stream := bytes.NewBuffer(nil)
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{
+				"content": "这是一段中文输出内容，加权口径下的计数应显著高于官方口径。",
+			},
+		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+			"messageMetadataEvent": map[string]any{
+				"tokenUsage": map[string]any{
+					"uncachedInputTokens": 10,
+					// outputTokens intentionally absent
+				},
+			},
+		}))
+		return stream
+	}
+
+	official, err := ParseNonStreamingEventStreamWithContext(buildStream(), "claude-sonnet-4-5", KiroRequestContext{})
+	require.NoError(t, err)
+	require.Greater(t, official.Usage.OutputTokens, 0)
+
+	weighted, err := ParseNonStreamingEventStreamWithContext(buildStream(), "claude-sonnet-4-5", KiroRequestContext{
+		TokenizerAlgorithm: anthropictokenizer.AlgorithmWeighted,
+	})
+	require.NoError(t, err)
+	require.Greater(t, weighted.Usage.OutputTokens, official.Usage.OutputTokens,
+		"weighted algorithm should count CJK output higher than official")
+
+	charclass, err := ParseNonStreamingEventStreamWithContext(buildStream(), "claude-sonnet-4-5", KiroRequestContext{
+		TokenizerAlgorithm: anthropictokenizer.AlgorithmCharClass,
+	})
+	require.NoError(t, err)
+	require.Greater(t, charclass.Usage.OutputTokens, official.Usage.OutputTokens,
+		"charclass algorithm should count CJK output higher than official")
+}
+
+// msgIDPattern 匹配响应体里随机生成的 Claude message id，用于截断一致性比较前的归一化。
+var msgIDPattern = regexp.MustCompile(`"id":"msg_[A-Za-z0-9]+"`)
+
+// 截断是官方 token 语义的功能行为：不随计量口径膨胀而提前截断。
+// 非流式路径的 buildClaudeResponse → applyMaxOutputTokensToTextBlocks 是
+// 截断实际生效的位置；两种计量口径下的截断结果必须一致。
+func TestParseNonStreamingEventStreamTruncationKeepsOfficialAlgorithm(t *testing.T) {
+	longText := strings.Repeat("这是一段用于截断判定的中文文本。", 40)
+	require.Greater(t, anthropictokenizer.CountTokens(longText), 50, "precondition: exceeds the cap under official counting")
+
+	buildStream := func() *bytes.Buffer {
+		stream := bytes.NewBuffer(nil)
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": longText},
+		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+			"messageMetadataEvent": map[string]any{
+				"tokenUsage": map[string]any{
+					"uncachedInputTokens": 10,
+					// outputTokens intentionally absent
+				},
+			},
+		}))
+		return stream
+	}
+
+	parse := func(alg anthropictokenizer.Algorithm) *ParseResult {
+		result, err := ParseNonStreamingEventStreamWithContext(buildStream(), "claude-sonnet-4-5", KiroRequestContext{
+			MaxOutputTokens:    50,
+			TokenizerAlgorithm: alg,
+		})
+		require.NoError(t, err)
+		return result
+	}
+
+	official := parse(anthropictokenizer.AlgorithmOfficial)
+	weighted := parse(anthropictokenizer.AlgorithmWeighted)
+	require.Contains(t, string(official.ResponseBody), `"stop_reason":"max_tokens"`, "official run should hit the cap")
+	// 响应含随机生成的 msg_ id，比较前归一化。
+	stripMsgID := func(body []byte) string {
+		return msgIDPattern.ReplaceAllString(string(body), `"id":"msg_normalized"`)
+	}
+	require.Equal(t, stripMsgID(official.ResponseBody), stripMsgID(weighted.ResponseBody),
+		"truncation result must be identical under both metering algorithms")
+	// usage 兜底估算仍然跟随算法（加权口径的 output_tokens 更高）。
+	require.Greater(t, weighted.Usage.OutputTokens, official.Usage.OutputTokens)
 }
 
 func TestParseNonStreamingEventStreamEstimatesOutputTokensWhenMissing(t *testing.T) {

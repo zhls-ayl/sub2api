@@ -1,11 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"log/slog"
 	"math"
 	"net/http"
 	"strings"
@@ -210,7 +213,7 @@ func (s *LeonardoImageService) GenerateCall(
 		return nil, reqErr
 	}
 
-	request, slot, err := s.buildUpstreamRequest(upstreamModel, req)
+	request, plan, err := s.buildUpstreamRequest(upstreamModel, req, account.LeonardoImageLimits())
 	if err != nil {
 		return nil, err
 	}
@@ -265,18 +268,37 @@ func (s *LeonardoImageService) GenerateCall(
 	}
 	// 上游普通图是 JPEG、透明背景是 PNG；客户端指定 output_format 时本机转码，
 	// 未指定时保持上游格式（validateLeonardoImageParams 已拦掉不支持的取值）。
+	// 账号出图上限让出图尺寸小于客户尺寸时，本地等比超分回客户尺寸（超分时
+	// 一并按 output_format 编码）。
 	outputFormat, _ := normalizeImageOutputFormat(req.OutputFormat)
-	images = applyImageOutputFormat(images, outputFormat, req.OutputCompression)
+	if plan.Upscaled() {
+		images = upscaleImages(images, plan.Target.Width, plan.Target.Height, outputFormat, req.OutputCompression)
+	} else {
+		images = applyImageOutputFormat(images, outputFormat, req.OutputCompression)
+	}
+	delivered := leonardoDeliveredSize(images, detail, plan)
+	if plan.Upscaled() || plan.Quality != plan.RequestedQuality {
+		slog.Info("leonardo_image_limits_applied",
+			"account_id", account.ID,
+			"requested_size", fmt.Sprintf("%dx%d", plan.Target.Width, plan.Target.Height),
+			"source_size", fmt.Sprintf("%dx%d", plan.Source.Width, plan.Source.Height),
+			"delivered_size", fmt.Sprintf("%dx%d", delivered.Width, delivered.Height),
+			"requested_quality", plan.RequestedQuality,
+			"quality", plan.Quality,
+			"credits", generated.APICreditCost)
+	}
 
 	// 回显字段与 usage 先算好：非流式写进响应体最外层，假流式写进 completed 事件。
+	// size 是交付尺寸，quality 回显客户请求的档位（账号上限只影响实际出图）。
 	result := &LeonardoImageResult{
 		APICreditCost: generated.APICreditCost,
 		GenerationID:  generated.GenerationID,
-		Size:          leonardoResultSize(detail, slot),
+		Size:          fmt.Sprintf("%dx%d", delivered.Width, delivered.Height),
 		OutputFormat:  leonardoImageOutputFormat(images),
-		Quality:       strings.ToLower(request.Parameters.Quality),
+		Quality:       strings.ToLower(plan.RequestedQuality),
 		Background:    leonardoResultBackground(request.Parameters.Transparency),
-		Usage:         leonardoImageUsage(requestedModel, req.Prompt, generated.APICreditCost, call.UsageTokensPerCredit),
+		Usage: leonardoImageUsage(requestedModel, req.Prompt, generated.APICreditCost, call.UsageTokensPerCredit,
+			leonardoUsageScale(plan, delivered)),
 	}
 
 	requestID := "leonardo-image:" + uuid.NewString()
@@ -289,7 +311,7 @@ func (s *LeonardoImageService) GenerateCall(
 		RequestID:        requestID,
 		Model:            requestedModel,
 		ImageCount:       len(images),
-		ImageSize:        leonardoBillingSize(detail.ImageWidth, detail.ImageHeight, images, slot),
+		ImageSize:        leonardoBillingSize(delivered.Width, delivered.Height, &plan.Target),
 		UpstreamModel:    upstreamModel,
 		UpstreamEndpoint: leonardo.GraphQLURL,
 		Duration:         time.Since(startTime),
@@ -311,15 +333,19 @@ func (s *LeonardoImageService) GenerateCall(
 }
 
 // leonardoImageUsage 估算 OpenAI 形状的 usage：Leonardo 不报 token 用量，输出
-// token 按本次扣除的积分 × tokensPerCredit 估算（积分与 OpenAI 出图 token 成正比：
-// gpt-image-1 官方表 LOW 1024x1024 = 272 token、1536x1024 = 408 token，对应
-// Leonardo 8 / 12 积分，均为 34 token/积分）；提示词按 o200k 分词计数，参考图
+// token 按本次扣除的积分 × tokensPerCredit × scale 估算（积分与 OpenAI 出图 token
+// 成正比：gpt-image-1 官方表 LOW 1024x1024 = 272 token、1536x1024 = 408 token，对应
+// Leonardo 8 / 12 积分，均为 34 token/积分；scale 把账号上限降下来的尺寸与质量
+// 折回客户请求的口径，见 leonardoUsageScale）；提示词按 o200k 分词计数，参考图
 // 输入 token 没有公开公式，记 0。tokensPerCredit ≤ 0 或积分未知时返回 nil。
-func leonardoImageUsage(model, prompt string, credits int, tokensPerCredit float64) json.RawMessage {
+func leonardoImageUsage(model, prompt string, credits int, tokensPerCredit, scale float64) json.RawMessage {
 	if tokensPerCredit <= 0 || credits <= 0 {
 		return nil
 	}
-	outputTokens := int(math.Round(float64(credits) * tokensPerCredit))
+	if scale <= 0 {
+		scale = 1
+	}
+	outputTokens := int(math.Round(float64(credits) * tokensPerCredit * scale))
 	textTokens := 0
 	if codec, err := openAIInputTokensCodecForModel(model); err == nil {
 		if n, err := codec.Count(prompt); err == nil {
@@ -339,15 +365,48 @@ func leonardoImageUsage(model, prompt string, credits int, tokensPerCredit float
 	return usage
 }
 
-// leonardoResultSize 优先取上游报告的实际尺寸，缺失时退回请求解析出的槽位。
-func leonardoResultSize(detail *leonardo.GenerationDetail, slot *leonardo.ImageSlot) string {
-	if detail != nil && detail.ImageWidth > 0 && detail.ImageHeight > 0 {
-		return fmt.Sprintf("%dx%d", detail.ImageWidth, detail.ImageHeight)
+// leonardoQualityTokens 是各质量档 1024x1024 出图的 token 数（gpt-image-1 官方表；
+// XHIGH / MAX 没有公开数据，按 HIGH 计），只用来算质量档之间的倍数。
+var leonardoQualityTokens = map[string]float64{
+	leonardo.QualityLow:    272,
+	leonardo.QualityMedium: 1056,
+	leonardo.QualityHigh:   4160,
+	leonardo.QualityXHigh:  4160,
+	leonardo.QualityMax:    4160,
+}
+
+// leonardoUsageScale 把实扣积分折回客户请求口径的倍数：超分时乘交付像素 ÷ 出图
+// 像素，质量被账号上限降档时再乘请求档 ÷ 实际档的 token 倍数。
+func leonardoUsageScale(plan *leonardo.ImagePlan, delivered leonardo.ImageSlot) float64 {
+	scale := 1.0
+	if plan == nil {
+		return scale
 	}
-	if slot != nil {
-		return fmt.Sprintf("%dx%d", slot.Width, slot.Height)
+	if plan.Upscaled() && plan.Source.Width > 0 && plan.Source.Height > 0 && delivered.Width > 0 && delivered.Height > 0 {
+		scale *= float64(delivered.Width*delivered.Height) / float64(plan.Source.Width*plan.Source.Height)
 	}
-	return ""
+	requested, actual := leonardoQualityTokens[plan.RequestedQuality], leonardoQualityTokens[plan.Quality]
+	if requested > 0 && actual > 0 {
+		scale *= requested / actual
+	}
+	return scale
+}
+
+// leonardoDeliveredSize 返回交付给客户的实际尺寸：优先读首张最终图（超分失败
+// 退回原图时如实变小）；读不到时未超分取上游报告的尺寸，再退回计划的交付尺寸。
+func leonardoDeliveredSize(images [][]byte, detail *leonardo.GenerationDetail, plan *leonardo.ImagePlan) leonardo.ImageSlot {
+	if len(images) > 0 {
+		if cfg, _, err := image.DecodeConfig(bytes.NewReader(images[0])); err == nil && cfg.Width > 0 && cfg.Height > 0 {
+			return leonardo.ImageSlot{Width: cfg.Width, Height: cfg.Height}
+		}
+	}
+	if !plan.Upscaled() && detail != nil && detail.ImageWidth > 0 && detail.ImageHeight > 0 {
+		return leonardo.ImageSlot{Width: detail.ImageWidth, Height: detail.ImageHeight}
+	}
+	if plan != nil {
+		return plan.Target
+	}
+	return leonardo.ImageSlot{}
 }
 
 // leonardoImageOutputFormat 按首张图文件头判定输出格式（Leonardo 普通图是 JPEG，
@@ -375,9 +434,12 @@ func leonardoResultBackground(transparent bool) string {
 	return "opaque"
 }
 
-// buildUpstreamRequest 解析 size/quality 并构造 Generate 请求与目标尺寸槽位。
-func (s *LeonardoImageService) buildUpstreamRequest(upstreamModel string, req *OpenAIImagesRequest) (*leonardo.GenerateRequest, *leonardo.ImageSlot, error) {
-	request, err := leonardo.BuildImageRequest(leonardo.ImageOptions{
+// buildUpstreamRequest 解析 size/quality 并构造 Generate 请求；limits 是账号出图
+// 上限，返回的 plan 记录交付尺寸、出图尺寸与请求/实际质量档。
+func (s *LeonardoImageService) buildUpstreamRequest(
+	upstreamModel string, req *OpenAIImagesRequest, limits leonardo.ImageLimits,
+) (*leonardo.GenerateRequest, *leonardo.ImagePlan, error) {
+	return leonardo.BuildImagePlanRequest(leonardo.ImageOptions{
 		UpstreamModel: upstreamModel,
 		Prompt:        req.Prompt,
 		Quality:       req.Quality,
@@ -387,15 +449,8 @@ func (s *LeonardoImageService) buildUpstreamRequest(upstreamModel string, req *O
 		ExtendedQuality: domain.LeonardoSupportsExtendedQuality(upstreamModel),
 		// 只在客户端明确要透明背景时才开：默认开会把所有图都变成透明 PNG。
 		Transparent: leonardoWantsTransparentBackground(req),
+		Limits:      limits,
 	})
-	if err != nil {
-		return nil, nil, err
-	}
-	slot, err := leonardo.ResolveImageSlot(req.Size)
-	if err != nil {
-		return nil, nil, err
-	}
-	return request, slot, nil
 }
 
 // uploadReferenceImages 把参考图（multipart 字节 + JSON URL）上传并过审，
@@ -680,9 +735,9 @@ func (s *LeonardoImageService) buildResponseBody(ctx context.Context, requestID 
 	return rewritten, nil
 }
 
-// leonardoBillingSize 决定计费档位：优先上游报告的实际输出像素，缺失时退回
-// 请求解析出的尺寸槽位。
-func leonardoBillingSize(width, height int, images [][]byte, slot *leonardo.ImageSlot) string {
+// leonardoBillingSize 决定计费档位：按交付给客户的尺寸（超分后的尺寸），缺失时
+// 退回计划的交付尺寸。
+func leonardoBillingSize(width, height int, slot *leonardo.ImageSlot) string {
 	if width > 0 && height > 0 {
 		if tier, ok := ClassifyImageBillingTier(fmt.Sprintf("%dx%d", width, height)); ok {
 			return tier
