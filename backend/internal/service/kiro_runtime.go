@@ -165,7 +165,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		return nil, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 	if isOnlyWebSearchToolInBody(body) {
-		webSearchResult, webSearchErr := s.executeKiroWebSearch(ctx, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header)
+		webSearchResult, webSearchErr := s.executeKiroWebSearch(ctx, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header, s.kiroMixedToolWebSearchEnabled(ctx, parsed.Group))
 		switch {
 		case errors.Is(webSearchErr, errKiroWebSearchFallback):
 		case webSearchErr == nil:
@@ -185,31 +185,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				WebSearchCalls: webSearchResult.WebSearchCalls,
 			}, nil
 		default:
-			var httpErr *kiroWebSearchHTTPError
-			if errors.As(webSearchErr, &httpErr) && httpErr.Response != nil {
-				return nil, s.handleKiroHTTPError(ctx, httpErr.Response, c, account, mappedModel, body)
+			if err := s.finishKiroWebSearchLoopError(ctx, c, account, mappedModel, body, webSearchErr); err != nil {
+				return nil, err
 			}
-			var failoverErr *UpstreamFailoverError
-			if errors.As(webSearchErr, &failoverErr) {
-				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-					Platform:           account.Platform,
-					AccountID:          account.ID,
-					AccountName:        account.Name,
-					UpstreamStatusCode: failoverErr.StatusCode,
-					Kind:               "failover",
-					Message:            sanitizeUpstreamErrorMessage(webSearchErr.Error()),
-				})
-				return nil, failoverErr
-			}
-			safeErr := sanitizeUpstreamErrorMessage(webSearchErr.Error())
-			c.JSON(http.StatusBadGateway, gin.H{
-				"type": "error",
-				"error": gin.H{
-					"type":    "api_error",
-					"message": "Upstream request failed",
-				},
-			})
-			return nil, fmt.Errorf("kiro upstream request failed: %s", safeErr)
 		}
 	}
 	if s.kiroMixedToolWebSearchEnabled(ctx, parsed.Group) && hasMixedKiroWebSearchTools(body) {
@@ -235,31 +213,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				WebSearchCalls: webSearchResult.WebSearchCalls,
 			}, nil
 		default:
-			var httpErr *kiroWebSearchHTTPError
-			if errors.As(webSearchErr, &httpErr) && httpErr.Response != nil {
-				return nil, s.handleKiroHTTPError(ctx, httpErr.Response, c, account, mappedModel, body)
+			if err := s.finishKiroWebSearchLoopError(ctx, c, account, mappedModel, body, webSearchErr); err != nil {
+				return nil, err
 			}
-			var failoverErr *UpstreamFailoverError
-			if errors.As(webSearchErr, &failoverErr) {
-				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-					Platform:           account.Platform,
-					AccountID:          account.ID,
-					AccountName:        account.Name,
-					UpstreamStatusCode: failoverErr.StatusCode,
-					Kind:               "failover",
-					Message:            sanitizeUpstreamErrorMessage(webSearchErr.Error()),
-				})
-				return nil, failoverErr
-			}
-			safeErr := sanitizeUpstreamErrorMessage(webSearchErr.Error())
-			c.JSON(http.StatusBadGateway, gin.H{
-				"type": "error",
-				"error": gin.H{
-					"type":    "api_error",
-					"message": "Upstream request failed",
-				},
-			})
-			return nil, fmt.Errorf("kiro upstream request failed: %s", safeErr)
 		}
 	}
 
@@ -328,6 +284,42 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}, nil
 }
 
+// finishKiroWebSearchLoopError maps a web-search loop error onto the forward
+// response. Later-round failures stay a 502: unwrapping them into
+// handleKiroHTTPError or UpstreamFailoverError would retry a loop that already
+// completed earlier rounds.
+func (s *GatewayService) finishKiroWebSearchLoopError(ctx context.Context, c *gin.Context, account *Account, mappedModel string, body []byte, err error) error {
+	switch kiroWebSearchNonStreamFailureAction(err) {
+	case "failover_http":
+		var httpErr *kiroWebSearchHTTPError
+		if errors.As(err, &httpErr) && httpErr.Response != nil {
+			return s.handleKiroHTTPError(ctx, httpErr.Response, c, account, mappedModel, body)
+		}
+	case "failover":
+		var failoverErr *UpstreamFailoverError
+		if errors.As(err, &failoverErr) {
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: failoverErr.StatusCode,
+				Kind:               "failover",
+				Message:            sanitizeUpstreamErrorMessage(err.Error()),
+			})
+			return failoverErr
+		}
+	}
+	safeErr := sanitizeUpstreamErrorMessage(err.Error())
+	c.JSON(http.StatusBadGateway, gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":    "api_error",
+			"message": "Upstream request failed",
+		},
+	})
+	return fmt.Errorf("kiro upstream request failed: %s", safeErr)
+}
+
 func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group, cachePlanOverride *kiroCacheEmulationPlan) (*http.Response, int, error) {
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -366,7 +358,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		headers := make(http.Header)
 		headers.Set("Content-Type", "text/event-stream")
 		go func() {
-			streamErr := s.streamKiroWebSearchAsAnthropic(upstreamCtx, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, plan)
+			streamErr := s.streamKiroWebSearchAsAnthropic(upstreamCtx, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, plan, s.kiroMixedToolWebSearchEnabled(ctx, group))
 			if streamErr != nil {
 				_ = pw.CloseWithError(streamErr)
 				return

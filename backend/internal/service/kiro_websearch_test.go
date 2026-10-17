@@ -64,7 +64,7 @@ func TestWriteKiroWebSearchFinalRound_EndsWithMessageDeltaAndStop(t *testing.T) 
 	err := writeKiroWebSearchFinalRound(&out, chunks, 2, &kiropkg.StreamResult{
 		StopReason: "end_turn",
 		Usage:      kiropkg.Usage{OutputTokens: 15, KiroCredits: 0.17},
-	}, 0)
+	}, 0, false)
 	require.NoError(t, err)
 
 	body := out.String()
@@ -106,7 +106,7 @@ func TestHandleStreamingResponse_KiroWebSearchFinalRoundRecordsUsage(t *testing.
 		}, 0, &kiropkg.StreamResult{
 			StopReason: "end_turn",
 			Usage:      kiropkg.Usage{OutputTokens: 15, KiroCredits: 0.17},
-		}, 1)
+		}, 1, false)
 	}()
 
 	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-sonnet-4-6", "claude-sonnet-4-6", false)

@@ -156,7 +156,7 @@ func TestRunKiroMixedNonStream_IterationCapHandsOffFifthSearch(t *testing.T) {
 func TestRunKiroMixedNonStream_MCPFailureSurfacesErrorAndStops(t *testing.T) {
 	client := &scriptedKiroRoundClient{
 		rounds: []scriptedRound{{
-			body:  claudeToolMessage("tool_use", remoteWebSearchTool("toolu_search", "golang release")),
+			body:  claudeTextAndToolMessage("searching the docs", remoteWebSearchTool("toolu_search", "golang release")),
 			usage: kiropkg.Usage{InputTokens: 8, OutputTokens: 2},
 		}},
 		searches: []scriptedSearch{{err: fmt.Errorf("kiro mcp status 500: boom")}},
@@ -169,6 +169,7 @@ func TestRunKiroMixedNonStream_MCPFailureSurfacesErrorAndStops(t *testing.T) {
 	body := string(result.ResponseBody)
 	require.Contains(t, body, `"error_code":"unavailable"`)
 	require.Contains(t, body, `"type":"web_search_tool_result_error"`)
+	require.Contains(t, body, "searching the docs")
 	require.NotContains(t, body, `"type":"tool_use"`)
 
 	client = &scriptedKiroRoundClient{
@@ -206,7 +207,10 @@ func TestRunKiroMixedNonStream_FirstHTTPErrorFailoversWithoutCommit(t *testing.T
 	_, err = runKiroMixedNonStream(context.Background(), client, claudeCodeStyleWebSearchBody(), "claude-sonnet-4-6", 12)
 	require.Error(t, err)
 	var laterHTTP *kiroWebSearchHTTPError
-	require.False(t, errors.As(err, &laterHTTP))
+	require.ErrorAs(t, err, &laterHTTP)
+	require.Equal(t, 502, laterHTTP.Response.StatusCode)
+	require.Equal(t, "later_round", kiroWebSearchNonStreamFailureAction(err))
+	require.Equal(t, "failover_http", kiroWebSearchNonStreamFailureAction(&kiroWebSearchHTTPError{Response: &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("x"))}}))
 }
 
 func TestRunKiroMixedStream_EndsWithMessageDeltaAndRecordsUsage(t *testing.T) {
@@ -326,6 +330,256 @@ func TestApplyWebSearchCallSurcharge_NilPriceSkipsDefault(t *testing.T) {
 	priced := &CostBreakdown{TotalCost: 2, ActualCost: 2}
 	got = applyWebSearchCallSurcharge(priced, billing, 4, &free, 1)
 	require.Equal(t, 2.0, got.ActualCost)
+
+	negative := -1.0
+	negativeBase := &CostBreakdown{TotalCost: 2, ActualCost: 2}
+	got = applyWebSearchCallSurcharge(negativeBase, billing, 3, &negative, 1)
+	require.Equal(t, 2.0, got.ActualCost)
+	require.Equal(t, 2.0, got.TotalCost)
+}
+
+func TestOnlyWebSearchSwitchOffMatchesMainBehavior(t *testing.T) {
+	plain, cancel := kiroWebSearchLoopContext(context.Background(), false)
+	defer cancel()
+	_, hasDeadline := plain.Deadline()
+	require.False(t, hasDeadline)
+	limited, cancelLimited := kiroWebSearchLoopContext(context.Background(), true)
+	defer cancelLimited()
+	_, hasDeadline = limited.Deadline()
+	require.True(t, hasDeadline)
+
+	offMCP := &scriptedKiroRoundClient{
+		rounds: []scriptedRound{{
+			body:  claudeTextMessage("end_turn", "still answered"),
+			usage: kiropkg.Usage{InputTokens: 9, OutputTokens: 3, KiroCredits: 0.2},
+		}},
+		searches: []scriptedSearch{{err: fmt.Errorf("kiro mcp status 500: boom")}},
+	}
+	offResult, err := runKiroOnlyWebSearchNonStream(context.Background(), offMCP, nil, onlyWebSearchRequestBody("golang"), "claude-sonnet-4-6", 100, false)
+	require.NoError(t, err)
+	require.False(t, offMCP.sawSearchDeadline)
+	require.Equal(t, 1, offMCP.ri)
+	require.Equal(t, 0, offResult.WebSearchCalls)
+	require.Equal(t, 3, offResult.Usage.OutputTokens)
+	require.NotContains(t, string(offResult.ResponseBody), "web_search_tool_result_error")
+	require.NotContains(t, string(offResult.ResponseBody), "web_search_requests")
+	require.Contains(t, string(offResult.ResponseBody), "still answered")
+
+	onMCP := &scriptedKiroRoundClient{
+		searches: []scriptedSearch{{err: fmt.Errorf("kiro mcp status 500: boom")}},
+	}
+	onResult, err := runKiroOnlyWebSearchNonStream(context.Background(), onMCP, nil, onlyWebSearchRequestBody("golang"), "claude-sonnet-4-6", 100, true)
+	require.NoError(t, err)
+	require.True(t, onMCP.sawSearchDeadline)
+	require.Equal(t, 0, onMCP.ri)
+	require.Equal(t, 1, onResult.WebSearchCalls)
+	require.Contains(t, string(onResult.ResponseBody), `"error_code":"unavailable"`)
+
+	finalWithAlias := claudeTextAndToolMessage("answer", remoteWebSearchTool("toolu_final", ""))
+	rounds := []scriptedRound{
+		{body: claudeToolMessage("tool_use", remoteWebSearchTool("toolu_1", "next")), usage: kiropkg.Usage{InputTokens: 20, OutputTokens: 4, KiroCredits: 0.25}},
+		{body: finalWithAlias, usage: kiropkg.Usage{InputTokens: 0, OutputTokens: 6, KiroCredits: 0.25}},
+	}
+	searches := []scriptedSearch{
+		{results: &kiropkg.WebSearchResults{}},
+		{results: &kiropkg.WebSearchResults{}},
+	}
+	offUsage := &scriptedKiroRoundClient{preserveLaterRoundErrors: true, rounds: rounds, searches: searches}
+	offGot, err := runKiroOnlyWebSearchNonStream(context.Background(), offUsage, nil, onlyWebSearchRequestBody("golang"), "claude-sonnet-4-6", 100, false)
+	require.NoError(t, err)
+	require.Equal(t, 0, offGot.WebSearchCalls)
+	require.Equal(t, 6, offGot.Usage.OutputTokens)
+	require.InDelta(t, 0.25, offGot.Usage.KiroCredits, 1e-9)
+	require.Equal(t, 100, offGot.Usage.InputTokens)
+	require.Contains(t, string(offGot.ResponseBody), "remote_web_search")
+	require.NotContains(t, string(offGot.ResponseBody), "web_search_requests")
+
+	onUsage := &scriptedKiroRoundClient{rounds: append([]scriptedRound(nil), rounds...), searches: append([]scriptedSearch(nil), searches...)}
+	onGot, err := runKiroOnlyWebSearchNonStream(context.Background(), onUsage, nil, onlyWebSearchRequestBody("golang"), "claude-sonnet-4-6", 100, true)
+	require.NoError(t, err)
+	require.Equal(t, 2, onGot.WebSearchCalls)
+	require.Equal(t, 10, onGot.Usage.OutputTokens)
+	require.InDelta(t, 0.5, onGot.Usage.KiroCredits, 1e-9)
+	require.Equal(t, 20, onGot.Usage.InputTokens)
+	require.NotContains(t, string(onGot.ResponseBody), "remote_web_search")
+	require.Contains(t, string(onGot.ResponseBody), `"web_search_requests":2`)
+}
+
+func TestOnlyWebSearchStreamSwitchOffKeepsLegacyTermination(t *testing.T) {
+	offFail := &scriptedKiroRoundClient{
+		preserveLaterRoundErrors: true,
+		rounds: []scriptedRound{
+			{chunks: webSearchToolChunks(0, "toolu_1", "remote_web_search", "next"), stream: &kiropkg.StreamResult{StopReason: "tool_use", Usage: kiropkg.Usage{OutputTokens: 4}}},
+			{err: errors.New("upstream reset")},
+		},
+		searches: []scriptedSearch{{results: &kiropkg.WebSearchResults{}}},
+	}
+	var buf bytes.Buffer
+	err := runKiroOnlyWebSearchStream(context.Background(), offFail, nil, onlyWebSearchRequestBody("golang"), "claude-sonnet-4-6", 100, &buf, nil, false)
+	require.EqualError(t, err, "upstream reset")
+	require.False(t, kiroWebSearchIsLaterRound(err))
+	require.False(t, offFail.sawSearchDeadline)
+	require.NotContains(t, buf.String(), "event: error")
+	require.NotContains(t, buf.String(), "event: message_stop")
+
+	onFail := &scriptedKiroRoundClient{
+		rounds: []scriptedRound{
+			{chunks: webSearchToolChunks(0, "toolu_1", "remote_web_search", "next"), stream: &kiropkg.StreamResult{StopReason: "tool_use", Usage: kiropkg.Usage{OutputTokens: 4, KiroCredits: 0.1}}},
+			{err: errors.New("upstream reset")},
+		},
+		searches: []scriptedSearch{{results: &kiropkg.WebSearchResults{}}},
+	}
+	buf.Reset()
+	err = runKiroOnlyWebSearchStream(context.Background(), onFail, nil, onlyWebSearchRequestBody("golang"), "claude-sonnet-4-6", 100, &buf, nil, true)
+	require.NoError(t, err)
+	require.True(t, onFail.sawSearchDeadline)
+	require.NotContains(t, buf.String(), "event: error")
+	require.Contains(t, buf.String(), "event: message_stop")
+	require.Contains(t, buf.String(), `"output_tokens":4`)
+
+	offMCP := &scriptedKiroRoundClient{
+		rounds: []scriptedRound{{
+			chunks: textChunks(0, "after empty search"),
+			stream: &kiropkg.StreamResult{StopReason: "end_turn", Usage: kiropkg.Usage{OutputTokens: 2}},
+		}},
+		searches: []scriptedSearch{{err: fmt.Errorf("kiro mcp status 500: boom")}},
+	}
+	buf.Reset()
+	err = runKiroOnlyWebSearchStream(context.Background(), offMCP, nil, onlyWebSearchRequestBody("golang"), "claude-sonnet-4-6", 100, &buf, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, offMCP.ri)
+	require.NotContains(t, buf.String(), "web_search_tool_result_error")
+	require.NotContains(t, buf.String(), "web_search_requests")
+	require.Contains(t, buf.String(), "after empty search")
+	require.Contains(t, buf.String(), "event: message_stop")
+
+	aliasChunks := webSearchToolChunks(0, "toolu_final", "remote_web_search", "")
+	offOK := &scriptedKiroRoundClient{
+		rounds: []scriptedRound{
+			{chunks: webSearchToolChunks(0, "toolu_1", "web_search", "next"), stream: &kiropkg.StreamResult{Usage: kiropkg.Usage{OutputTokens: 4, KiroCredits: 0.25}}},
+			{chunks: aliasChunks, stream: &kiropkg.StreamResult{StopReason: "tool_use", Usage: kiropkg.Usage{OutputTokens: 6, KiroCredits: 0.25}}},
+		},
+		searches: []scriptedSearch{{results: &kiropkg.WebSearchResults{}}, {results: &kiropkg.WebSearchResults{}}},
+	}
+	buf.Reset()
+	err = runKiroOnlyWebSearchStream(context.Background(), offOK, nil, onlyWebSearchRequestBody("golang"), "claude-sonnet-4-6", 100, &buf, nil, false)
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), `"output_tokens":6`)
+	require.NotContains(t, buf.String(), "web_search_requests")
+	require.Contains(t, buf.String(), "remote_web_search")
+	require.Contains(t, buf.String(), "event: message_stop")
+
+	onOK := &scriptedKiroRoundClient{
+		rounds: []scriptedRound{
+			{chunks: webSearchToolChunks(0, "toolu_1", "web_search", "next"), stream: &kiropkg.StreamResult{Usage: kiropkg.Usage{OutputTokens: 4, KiroCredits: 0.25}}},
+			{chunks: aliasChunks, stream: &kiropkg.StreamResult{StopReason: "tool_use", Usage: kiropkg.Usage{OutputTokens: 6, KiroCredits: 0.25}}},
+		},
+		searches: []scriptedSearch{{results: &kiropkg.WebSearchResults{}}, {results: &kiropkg.WebSearchResults{}}},
+	}
+	buf.Reset()
+	err = runKiroOnlyWebSearchStream(context.Background(), onOK, nil, onlyWebSearchRequestBody("golang"), "claude-sonnet-4-6", 100, &buf, nil, true)
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), `"output_tokens":10`)
+	require.Contains(t, buf.String(), `"web_search_requests":2`)
+	require.NotContains(t, buf.String(), "remote_web_search")
+	require.NotContains(t, buf.String(), "event: error")
+}
+
+func TestForward_KiroLaterRoundFailureBillsCompletedUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	client := &scriptedKiroRoundClient{
+		rounds: []scriptedRound{
+			{
+				chunks: webSearchToolChunks(0, "toolu_search", "remote_web_search", "golang release"),
+				stream: &kiropkg.StreamResult{StopReason: "tool_use", Usage: kiropkg.Usage{OutputTokens: 4, KiroCredits: 0.1}},
+			},
+			{err: errors.New("upstream reset")},
+		},
+		searches: []scriptedSearch{{results: &kiropkg.WebSearchResults{Results: []kiropkg.WebSearchResult{{Title: "Go", URL: "https://go.dev"}}}}},
+	}
+	var buf bytes.Buffer
+	err := runKiroMixedStream(context.Background(), client, &buf, claudeCodeStyleWebSearchBody(), "claude-sonnet-4-6", 100, &kiroCacheEmulationUsage{
+		InputTokens:              25,
+		CacheCreationInputTokens: 75,
+	})
+	require.NoError(t, err)
+	raw := buf.String()
+	require.NotContains(t, raw, "event: error")
+	require.Contains(t, raw, "event: message_stop")
+	require.Contains(t, raw, `"output_tokens":4`)
+
+	forward := func(sse string) (*ForwardResult, error, string) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		body := []byte(`{"model":"claude-3-5-sonnet-latest","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
+		parsed, parseErr := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+		require.NoError(t, parseErr)
+		upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"text/event-stream"},
+				"X-Request-Id": []string{"rid-kiro-later"},
+			},
+			Body: io.NopCloser(strings.NewReader(sse)),
+		}}
+		svc := newForwardPartialUsageServiceForTest(upstream)
+		result, fwdErr := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+		return result, fwdErr, rec.Body.String()
+	}
+
+	result, fwdErr, clientBody := forward(raw)
+	require.NoError(t, fwdErr)
+	require.NotNil(t, result)
+	require.Equal(t, 4, result.Usage.OutputTokens)
+	require.Equal(t, 25, result.Usage.InputTokens)
+	var failover *UpstreamFailoverError
+	require.False(t, errors.As(fwdErr, &failover))
+	require.Contains(t, clientBody, "event: message_stop")
+	require.NotContains(t, clientBody, "event: error")
+
+	poisoned := strings.Replace(raw, "event: message_delta", "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Upstream request failed\"}}\n\nevent: message_delta", 1)
+	result, fwdErr, _ = forward(poisoned)
+	require.Error(t, fwdErr)
+	require.ErrorAs(t, fwdErr, &failover)
+	require.Nil(t, result)
+}
+
+func TestGatewayKiroRoundClient_LaterRoundWrapsCause(t *testing.T) {
+	client := &gatewayKiroRoundClient{
+		enhanced: true,
+		upstream: func(context.Context, []byte) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("down"))}, nil
+		},
+	}
+	_, err := client.complete(context.Background(), []byte(`{"messages":[]}`), true, 1)
+	require.Error(t, err)
+	require.True(t, kiroWebSearchIsLaterRound(err))
+	var httpErr *kiroWebSearchHTTPError
+	require.ErrorAs(t, err, &httpErr)
+	require.Equal(t, http.StatusBadGateway, httpErr.Response.StatusCode)
+	require.Equal(t, "later_round", kiroWebSearchNonStreamFailureAction(err))
+	require.EqualError(t, errors.Unwrap(err), httpErr.Error())
+
+	client.upstream = func(context.Context, []byte) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	}
+	_, err = client.complete(context.Background(), []byte(`{"messages":[]}`), true, 1)
+	require.True(t, kiroWebSearchIsLaterRound(err))
+	require.EqualError(t, errors.Unwrap(err), "dial failed")
+
+	wrappedFailover := kiroWebSearchLaterRoundError(&UpstreamFailoverError{StatusCode: http.StatusPaymentRequired})
+	require.Equal(t, "later_round", kiroWebSearchNonStreamFailureAction(wrappedFailover))
+	require.ErrorAs(t, wrappedFailover, new(*UpstreamFailoverError))
+
+	client.enhanced = false
+	client.upstream = func(context.Context, []byte) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("down"))}, nil
+	}
+	round, err := client.complete(context.Background(), []byte(`{"messages":[]}`), true, 1)
+	require.NoError(t, err)
+	require.NotNil(t, round.HTTPErr)
+	require.Equal(t, "failover_http", kiroWebSearchNonStreamFailureAction(round.HTTPErr))
 }
 
 type scriptedRound struct {
@@ -343,12 +597,14 @@ type scriptedSearch struct {
 }
 
 type scriptedKiroRoundClient struct {
-	rounds   []scriptedRound
-	searches []scriptedSearch
-	bodies   [][]byte
-	queries  []string
-	ri       int
-	si       int
+	rounds                   []scriptedRound
+	searches                 []scriptedSearch
+	bodies                   [][]byte
+	queries                  []string
+	ri                       int
+	si                       int
+	preserveLaterRoundErrors bool
+	sawSearchDeadline        bool
 }
 
 func (c *scriptedKiroRoundClient) complete(ctx context.Context, body []byte, _ bool, iteration int) (*kiroModelRound, error) {
@@ -362,16 +618,16 @@ func (c *scriptedKiroRoundClient) complete(ctx context.Context, body []byte, _ b
 	round := c.rounds[c.ri]
 	c.ri++
 	if round.err != nil {
-		if iteration > 0 {
+		if iteration > 0 && !c.preserveLaterRoundErrors {
 			return nil, kiroWebSearchLaterRoundError(round.err)
 		}
 		return nil, round.err
 	}
 	if round.httpStatus >= 400 {
 		resp := &http.Response{StatusCode: round.httpStatus, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("fail"))}
-		if iteration > 0 {
+		if iteration > 0 && !c.preserveLaterRoundErrors {
 			_ = resp.Body.Close()
-			return nil, fmt.Errorf("kiro web search upstream status %d after first round", round.httpStatus)
+			return nil, kiroWebSearchLaterRoundError(&kiroWebSearchHTTPError{Response: resp})
 		}
 		return &kiroModelRound{HTTPErr: &kiroWebSearchHTTPError{Response: resp}}, nil
 	}
@@ -395,6 +651,9 @@ func (r scriptedRound) streamStop() string {
 func (c *scriptedKiroRoundClient) search(ctx context.Context, query string) (*kiropkg.WebSearchResults, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if _, ok := ctx.Deadline(); ok {
+		c.sawSearchDeadline = true
 	}
 	c.queries = append(c.queries, query)
 	if c.si >= len(c.searches) {
@@ -427,6 +686,20 @@ func claudeCodeStyleWebSearchBody() []byte {
 			map[string]any{"role": "user", "content": "find the go release notes and list the repo"},
 		},
 		"tools": tools,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+func onlyWebSearchRequestBody(query string) []byte {
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4-6",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "Perform a web search for the query: " + query},
+		},
+		"tools": []any{map[string]any{"type": "web_search_20250305", "name": "web_search"}},
 	})
 	if err != nil {
 		panic(err)
@@ -475,6 +748,25 @@ func claudeToolMessage(stop string, tools ...map[string]any) []byte {
 		"stop_reason": stop,
 		"content":     content,
 		"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+func claudeTextAndToolMessage(text string, tool map[string]any) []byte {
+	body, err := json.Marshal(map[string]any{
+		"id":          "msg_test",
+		"type":        "message",
+		"role":        "assistant",
+		"model":       "claude-sonnet-4-6",
+		"stop_reason": "tool_use",
+		"content": []any{
+			map[string]any{"type": "text", "text": text},
+			tool,
+		},
+		"usage": map[string]any{"input_tokens": 1, "output_tokens": 1},
 	})
 	if err != nil {
 		panic(err)

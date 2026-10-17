@@ -1034,6 +1034,10 @@ func applyWebSearchCallSurcharge(tokenCost *CostBreakdown, billing *BillingServi
 	if billing == nil || calls <= 0 || price == nil {
 		return tokenCost
 	}
+	if *price < 0 {
+		logger.LegacyPrintf("service.gateway", "[Billing] web_search_price_per_call negative; skipping surcharge calls=%d", calls)
+		return tokenCost
+	}
 	extra := billing.CalculateWebSearchCost(calls, price, multiplier)
 	if extra == nil || (extra.TotalCost == 0 && extra.ActualCost == 0) {
 		return tokenCost

@@ -59,6 +59,10 @@ type gatewayKiroRoundClient struct {
 	cacheReady   bool
 	upstream     func(ctx context.Context, body []byte) (*http.Response, error)
 	commitCache  func()
+	// enhanced selects mixed-tool loop behavior. With it off, a later-round
+	// upstream failure is returned unchanged so the only-web_search path
+	// matches the pre-switch gateway.
+	enhanced bool
 }
 
 func (s *GatewayService) newGatewayKiroRoundClient(account *Account, group *Group, token, mappedModel, requestModel string, headers http.Header, inputTokens int, originalBody []byte, plan *kiroCacheEmulationPlan) *gatewayKiroRoundClient {
@@ -99,7 +103,7 @@ func (c *gatewayKiroRoundClient) complete(ctx context.Context, body []byte, stre
 		resp, _, err = c.svc.executeKiroUpstream(ctx, c.account, body, c.mappedModel, c.requestModel, c.token, c.headers)
 	}
 	if err != nil {
-		if iteration > 0 {
+		if iteration > 0 && c.enhanced {
 			return nil, kiroWebSearchLaterRoundError(err)
 		}
 		return nil, err
@@ -108,11 +112,12 @@ func (c *gatewayKiroRoundClient) complete(ctx context.Context, body []byte, stre
 		return nil, fmt.Errorf("kiro web search upstream returned nil response")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if iteration > 0 {
+		httpErr := &kiroWebSearchHTTPError{Response: resp}
+		if iteration > 0 && c.enhanced {
 			_ = resp.Body.Close()
-			return nil, fmt.Errorf("kiro web search upstream status %d after first round", resp.StatusCode)
+			return nil, kiroWebSearchLaterRoundError(httpErr)
 		}
-		return &kiroModelRound{HTTPErr: &kiroWebSearchHTTPError{Response: resp}}, nil
+		return &kiroModelRound{HTTPErr: httpErr}, nil
 	}
 	if !c.cacheReady {
 		if c.commitCache != nil {
@@ -155,6 +160,25 @@ func (c *gatewayKiroRoundClient) complete(ctx context.Context, body []byte, stre
 	}, nil
 }
 
+func (c *gatewayKiroRoundClient) prefetch(ctx context.Context) {
+	if c == nil || c.svc == nil {
+		return
+	}
+	c.svc.prefetchKiroWebSearchDescription(ctx, c.account, c.token)
+}
+
+// kiroWebSearchLoopContext applies the mixed-tool loop deadline only when that
+// behavior is enabled. The switch-off only-web_search path keeps the caller ctx.
+func kiroWebSearchLoopContext(ctx context.Context, enhanced bool) (context.Context, context.CancelFunc) {
+	if !enhanced {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return ctx, func() {}
+	}
+	return withKiroWebSearchLoopDeadline(ctx)
+}
+
 func withKiroWebSearchLoopDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -191,11 +215,62 @@ func kiroWebSearchToolErrorCode(err error) string {
 	return "unavailable"
 }
 
+// kiroWebSearchLaterRoundFailure marks an upstream failure after the first
+// model round has already succeeded. Unwrap exposes the cause to errors.As.
+// Callers must handle this wrapper before *kiroWebSearchHTTPError or
+// *UpstreamFailoverError, or a started loop would be failed over.
+type kiroWebSearchLaterRoundFailure struct {
+	err error
+}
+
+func (e *kiroWebSearchLaterRoundFailure) Error() string {
+	if e == nil || e.err == nil {
+		return "kiro web search upstream failed after first round"
+	}
+	return "kiro web search upstream failed after first round: " + e.err.Error()
+}
+
+func (e *kiroWebSearchLaterRoundFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
 func kiroWebSearchLaterRoundError(err error) error {
 	if err == nil {
-		return fmt.Errorf("kiro web search upstream failed after first round")
+		err = errors.New("kiro web search upstream failed after first round")
 	}
-	return fmt.Errorf("kiro web search upstream failed after first round: %s", err.Error())
+	return &kiroWebSearchLaterRoundFailure{err: err}
+}
+
+func kiroWebSearchIsLaterRound(err error) bool {
+	var later *kiroWebSearchLaterRoundFailure
+	return errors.As(err, &later)
+}
+
+// kiroWebSearchNonStreamFailureAction is the forward-layer decision for a
+// non-streaming web-search loop error. A later-round wrapper is a plain 502
+// even when it unwraps to an HTTP or failover error.
+func kiroWebSearchNonStreamFailureAction(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, errKiroWebSearchFallback):
+		return "fallback"
+	case kiroWebSearchIsLaterRound(err):
+		return "later_round"
+	default:
+		var httpErr *kiroWebSearchHTTPError
+		if errors.As(err, &httpErr) && httpErr.Response != nil {
+			return "failover_http"
+		}
+		var failoverErr *UpstreamFailoverError
+		if errors.As(err, &failoverErr) {
+			return "failover"
+		}
+		return "bad_gateway"
+	}
 }
 
 func mergeKiroRoundUsage(dst *kiropkg.Usage, src kiropkg.Usage) {
@@ -229,6 +304,46 @@ func absorbKiroStreamRound(dst *kiropkg.Usage, stop *string, result *kiropkg.Str
 	if stop != nil && strings.TrimSpace(result.StopReason) != "" {
 		*stop = strings.TrimSpace(result.StopReason)
 	}
+}
+
+// dropExecutedWebSearchToolUses removes web_search tool_use blocks that the
+// loop already surfaced as server-tool indicators, and keeps the model's text.
+func dropExecutedWebSearchToolUses(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	var msg map[string]any
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return body
+	}
+	content, ok := msg["content"].([]any)
+	if !ok {
+		return body
+	}
+	kept := make([]any, 0, len(content))
+	removed := false
+	for _, block := range content {
+		item, ok := block.(map[string]any)
+		if !ok {
+			kept = append(kept, block)
+			continue
+		}
+		if getInterfaceString(item["type"]) == "tool_use" && kiropkg.IsWebSearchToolName(getInterfaceString(item["name"]), "") {
+			removed = true
+			continue
+		}
+		kept = append(kept, block)
+	}
+	if !removed {
+		return body
+	}
+	msg["content"] = kept
+	msg["stop_reason"] = "end_turn"
+	encoded, err := json.Marshal(msg)
+	if err != nil {
+		return body
+	}
+	return encoded
 }
 
 func kiroWebSearchClientMessage(model string, usage ClaudeUsage, searches []kiropkg.SearchIndicator, modelBody []byte) []byte {
@@ -514,7 +629,7 @@ func runKiroMixedNonStream(ctx context.Context, client kiroRoundClient, body []b
 		if errors.Is(searchErr, errKiroWebSearchToolFailed) {
 			usage := kiroUsageToClaude(accUsage, inputTokens)
 			return &kiroWebSearchExecution{
-				ResponseBody:   kiroWebSearchClientMessage(requestModel, usage, searches, nil),
+				ResponseBody:   kiroWebSearchClientMessage(requestModel, usage, searches, dropExecutedWebSearchToolUses(round.Body)),
 				Usage:          usage,
 				RequestID:      requestID,
 				WebSearchCalls: len(searches),
@@ -560,11 +675,16 @@ func continueKiroMixedStream(ctx context.Context, client kiroRoundClient, w io.W
 			}
 			next, err := client.complete(ctx, current, true, iteration)
 			if err != nil {
+				status := 0
+				var httpErr *kiroWebSearchHTTPError
+				if errors.As(err, &httpErr) && httpErr.Response != nil {
+					status = httpErr.Response.StatusCode
+				}
 				logger.L().Warn("kiro mixed web search upstream failed after first round",
 					zap.Int("iteration", iteration),
+					zap.Int("status", status),
 					zap.Error(err),
 				)
-				_, _ = io.WriteString(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Upstream request failed\"}}\n\n")
 				return writeKiroWebSearchStreamTermination(w, &kiropkg.StreamResult{Usage: accUsage, StopReason: accStop}, len(searches))
 			}
 			round = next
@@ -584,7 +704,6 @@ func continueKiroMixedStream(ctx context.Context, client kiroRoundClient, w io.W
 				zap.Int("iteration", iteration),
 				zap.Int("status", status),
 			)
-			_, _ = io.WriteString(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Upstream request failed\"}}\n\n")
 			return writeKiroWebSearchStreamTermination(w, &kiropkg.StreamResult{Usage: accUsage, StopReason: accStop}, len(searches))
 		}
 		absorbKiroStreamRound(&accUsage, &accStop, round.Stream)
@@ -594,7 +713,7 @@ func continueKiroMixedStream(ctx context.Context, client kiroRoundClient, w io.W
 		tools := observeBufferedToolUses(round.Chunks)
 		final := &kiropkg.StreamResult{Usage: accUsage, StopReason: accStop}
 		if !kiroTurnContinuesWebSearch(tools, iteration) {
-			return writeKiroWebSearchFinalRound(w, round.Chunks, nextIndex, final, len(searches))
+			return writeKiroWebSearchFinalRound(w, round.Chunks, nextIndex, final, len(searches), true)
 		}
 		indices := make([]int, 0, len(tools))
 		for _, tool := range tools {
@@ -635,12 +754,14 @@ func (s *GatewayService) executeKiroMixedToolWebSearch(ctx context.Context, acco
 	defer cancel()
 	inputTokens := estimateKiroInputTokens(loopCtx, s.kiroMeteringAlgorithm(loopCtx), anthropicBody)
 	client := s.newGatewayKiroRoundClient(account, group, token, mappedModel, requestModel, headers, inputTokens, anthropicBody, nil)
+	client.enhanced = true
 	return runKiroMixedNonStream(loopCtx, client, anthropicBody, requestModel, inputTokens)
 }
 
 func (s *GatewayService) openKiroMixedToolWebSearchStream(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, inputTokens int, plan *kiroCacheEmulationPlan) (*http.Response, error) {
 	loopCtx, cancel := withKiroWebSearchLoopDeadline(ctx)
 	client := s.newGatewayKiroRoundClient(account, nil, token, mappedModel, requestModel, headers, inputTokens, anthropicBody, plan)
+	client.enhanced = true
 	first, err := client.complete(loopCtx, anthropicBody, true, 0)
 	if err != nil {
 		cancel()
