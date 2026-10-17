@@ -212,7 +212,7 @@ func BuildRuntimeUserAgent(accountKey, machineID string) string {
 	return fmt.Sprintf(
 		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/codewhispererstreaming#%s m/E KiroIDE-%s-%s",
 		fp.StreamingSDKVersion,
-		usageUAOSType(fp.OSType),
+		fp.OSType,
 		fp.OSVersion,
 		fp.NodeVersion,
 		fp.StreamingSDKVersion,
@@ -231,7 +231,7 @@ func BuildRuntimeAmzUserAgent(accountKey, machineID string) string {
 	)
 }
 
-// 用量 / ListAvailableModels 的 REST GET 客户端版本。
+// 用量 / OAuth ListAvailableModels 的 REST GET 客户端版本。
 // 服务端会按 UA 做 Builder ID / IdC 准入；跟随上游指纹版本，os/darwin 映射为 macos。
 const usageAPISDKVersion = "1.0.34"
 

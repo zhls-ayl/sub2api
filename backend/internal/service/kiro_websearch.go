@@ -57,6 +57,67 @@ func bufferKiroAnthropicStream(ctx context.Context, body io.Reader, responseMode
 	return collector.chunks, result, nil
 }
 
+// writeKiroWebSearchFinalRound forwards the last upstream turn's content blocks
+// and then closes the SSE stream. AdjustSSEChunk intentionally drops
+// message_start/message_delta/message_stop; without a replacement message_delta
+// and message_stop, handleStreamingResponse reports "missing terminal event"
+// and the request is not billed.
+func writeKiroWebSearchFinalRound(w io.Writer, chunks [][]byte, indexOffset int, result *kiropkg.StreamResult) error {
+	for _, chunk := range chunks {
+		adjusted, shouldForward := kiropkg.AdjustSSEChunk(chunk, indexOffset)
+		if !shouldForward {
+			continue
+		}
+		if _, err := w.Write(adjusted); err != nil {
+			return err
+		}
+	}
+	return writeKiroWebSearchStreamTermination(w, result)
+}
+
+// writeKiroWebSearchStreamTermination emits the client-visible end of a Kiro
+// web-search stream. output_tokens and credits come from the parsed upstream
+// turn. input_tokens are omitted so the cache-adjusted values already sent in
+// message_start are not replaced by the raw upstream count.
+func writeKiroWebSearchStreamTermination(w io.Writer, result *kiropkg.StreamResult) error {
+	stopReason := "end_turn"
+	outputTokens := 0
+	credits := 0.0
+	if result != nil {
+		if reason := strings.TrimSpace(result.StopReason); reason != "" {
+			stopReason = reason
+		}
+		outputTokens = result.Usage.OutputTokens
+		credits = result.Usage.KiroCredits
+	}
+	usage := map[string]any{
+		"output_tokens": outputTokens,
+	}
+	if credits > 0 {
+		usage["_sub2api_kiro_credits"] = credits
+	}
+	delta, err := json.Marshal(map[string]any{
+		"type": "message_delta",
+		"delta": map[string]any{
+			"stop_reason":   stopReason,
+			"stop_sequence": nil,
+		},
+		"usage": usage,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, "event: message_delta\ndata: "+string(delta)+"\n\n"); err != nil {
+		return err
+	}
+	stop, err := json.Marshal(map[string]any{"type": "message_stop"})
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, "event: message_stop\ndata: "+string(stop)+"\n\n")
+	return err
+}
+
 func writeSSEChunks(w io.Writer, chunks [][]byte) error {
 	for _, chunk := range chunks {
 		if len(chunk) == 0 {
@@ -157,7 +218,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			plan.commit()
 		}
 
-		chunks, _, streamErr := func() ([][]byte, *kiropkg.StreamResult, error) {
+		chunks, streamResult, streamErr := func() ([][]byte, *kiropkg.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
 			return bufferKiroAnthropicStream(ctx, resp.Body, requestModel, inputTokens)
 		}()
@@ -183,16 +244,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			continue
 		}
 
-		for _, chunk := range chunks {
-			adjusted, shouldForward := kiropkg.AdjustSSEChunk(chunk, nextContentBlockIndex)
-			if !shouldForward {
-				continue
-			}
-			if _, err := w.Write(adjusted); err != nil {
-				return err
-			}
-		}
-		return nil
+		return writeKiroWebSearchFinalRound(w, chunks, nextContentBlockIndex, streamResult)
 	}
 
 	return fmt.Errorf("kiro web search exceeded max iterations")

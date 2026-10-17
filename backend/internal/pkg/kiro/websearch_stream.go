@@ -264,6 +264,10 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool 
 		return false
 	}
 	eventType, _ := event["type"].(string)
+	// message_start is written once by the caller. message_delta/message_stop are
+	// dropped here so an intermediate search round cannot end the stream, and so
+	// the raw delta cannot overwrite the cache-adjusted input tokens from
+	// message_start. The final round must emit its own message_delta + message_stop.
 	if eventType == "message_start" || eventType == "message_delta" || eventType == "message_stop" {
 		return true
 	}

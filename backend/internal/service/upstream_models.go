@@ -214,15 +214,6 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 // untouched.
 func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, account *Account) (*UpstreamModelCatalog, error) {
 	if account != nil && account.Platform == PlatformKiro && isKiroDirectModeAccount(account) {
-		if account.Type == AccountTypeOAuth {
-			// Preserve OAuth profile resolution and regional 403 recovery while
-			// exposing the same public aliases and raw model IDs as direct API keys.
-			listed, err := s.fetchKiroUpstreamListedModels(ctx, account)
-			if err != nil {
-				return nil, err
-			}
-			return s.kiroCatalogFromListed(ctx, account, listed)
-		}
 		return s.syncKiroDirectModelCatalog(ctx, account)
 	}
 	models, body, err := s.fetchUpstreamModelList(ctx, account)
@@ -757,13 +748,6 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
 	}
 	if account.Platform == PlatformKiro && isKiroDirectModeAccount(account) {
-		if account.Type == AccountTypeOAuth {
-			ids, err := s.fetchKiroUpstreamModels(ctx, account)
-			if err != nil {
-				return nil, nil, err
-			}
-			return kiroSyncPublicModelNames(ids), nil, nil
-		}
 		models, err := s.fetchKiroDirectUpstreamModels(ctx, account)
 		return models, nil, err
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -164,6 +165,63 @@ func TestForwardKiroMessagesUnknownTokenLimitDoesNotReject(t *testing.T) {
 			require.False(t, repo.rateCalled)
 		})
 	}
+}
+
+func TestForwardKiroMessagesOnlyWebSearchPromptTooLong(t *testing.T) {
+	// 原始请求没超限。web_search 把结果注入之后才超过 maxInputTokens。
+	// only-web_search 的 default 必须返回 400。若合并把这段检查挪到 mixed-tool 分支，这里会变成 502。
+	kiroWebSearchDescCache.Delete(kiropkg.BuildMcpEndpoint("us-east-1"))
+	snippet := strings.Repeat("search result ", 4000)
+	inner, err := json.Marshal(map[string]any{
+		"results": []any{map[string]any{
+			"title":   "forecast",
+			"url":     "https://example.com/weather",
+			"snippet": snippet,
+		}},
+	})
+	require.NoError(t, err)
+	searchBody, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"result": map[string]any{
+			"content": []any{map[string]any{"type": "text", "text": string(inner)}},
+		},
+	})
+	require.NoError(t, err)
+
+	repo := &recordingKiroTempUnschedRepo{}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusOK, `{"jsonrpc":"2.0","result":{"tools":[]}}`),
+		newJSONResponse(http.StatusOK, string(searchBody)),
+	}}
+	svc := newKiroPromptGateway(upstream, repo)
+	account := kiroPromptLimitAccount(2_000, "claude-sonnet-4-5")
+	body, err := json.Marshal(map[string]any{
+		"model":      "claude-sonnet-4-5",
+		"max_tokens": 32,
+		"messages": []any{
+			map[string]any{"role": "user", "content": "weather in tokyo"},
+		},
+		"tools": []any{
+			map[string]any{"type": "web_search_20250305", "name": "web_search"},
+		},
+	})
+	require.NoError(t, err)
+	c, rec := kiroPromptGin()
+	parsed := &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: "claude-sonnet-4-5",
+	}
+
+	_, err = svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.Error(t, err)
+	var failover *UpstreamFailoverError
+	require.NotErrorAs(t, err, &failover)
+	requireKiroPromptTooLongResponse(t, rec, false)
+	require.Regexp(t, `^prompt is too long: \d+ tokens > 2000 maximum$`, gjson.Get(rec.Body.String(), "error.message").String())
+	require.LessOrEqual(t, len(upstream.requests), 2)
+	require.False(t, repo.called)
+	require.False(t, repo.rateCalled)
+	require.NotContains(t, rec.Body.String(), "Upstream request failed")
 }
 
 func TestHandleKiroHTTPErrorContentLengthDoesNotFailover(t *testing.T) {

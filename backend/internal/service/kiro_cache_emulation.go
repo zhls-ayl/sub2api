@@ -1142,6 +1142,9 @@ func sanitizeKiroImagesForTokenEstimate(ctx context.Context, value any) (any, in
 		if mediaType, source, ok := kiroImageTokenSource(typed); ok {
 			return sanitizeKiroImageBlock(typed), kiropkg.EstimateImageTokens(ctx, mediaType, source)
 		}
+		if kiroNonImageBase64Block(typed) {
+			return sanitizeKiroOpaqueDataBlock(typed, "[document]"), 0
+		}
 		out := make(map[string]any, len(typed))
 		tokens := 0
 		for key, item := range typed {
@@ -1179,6 +1182,53 @@ func sanitizeKiroImageBlock(value map[string]any) map[string]any {
 			if lowerKey == "data" || lowerKey == "url" || lowerKey == "image_url" {
 				out[key] = "[image]"
 			} else {
+				out[key] = typed
+			}
+		default:
+			out[key] = item
+		}
+	}
+	return out
+}
+
+// kiroNonImageBase64Block 识别 document/file 以及非图片的 base64 source。
+// 这些块的 data 按文本计 token 会把大 PDF 估成超长 prompt。
+func kiroNonImageBase64Block(value map[string]any) bool {
+	kind, _ := value["type"].(string)
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	switch kind {
+	case "document", "file", "input_file":
+		return true
+	}
+	source, ok := value["source"].(map[string]any)
+	if !ok {
+		return false
+	}
+	sourceType, _ := source["type"].(string)
+	return strings.EqualFold(strings.TrimSpace(sourceType), "base64") && kind != "image"
+}
+
+func sanitizeKiroOpaqueDataBlock(value map[string]any, placeholder string) map[string]any {
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		switch typed := item.(type) {
+		case map[string]any:
+			out[key] = sanitizeKiroOpaqueDataBlock(typed, placeholder)
+		case []any:
+			items := make([]any, len(typed))
+			for i, child := range typed {
+				if childMap, ok := child.(map[string]any); ok {
+					items[i] = sanitizeKiroOpaqueDataBlock(childMap, placeholder)
+				} else {
+					items[i] = child
+				}
+			}
+			out[key] = items
+		case string:
+			switch strings.ToLower(key) {
+			case "data", "url":
+				out[key] = placeholder
+			default:
 				out[key] = typed
 			}
 		default:

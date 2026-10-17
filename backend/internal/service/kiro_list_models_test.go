@@ -94,6 +94,72 @@ func TestKiroListAvailableModelsRetriesForbiddenRegion(t *testing.T) {
 	require.Equal(t, []string{"q.us-east-1.amazonaws.com", "q.eu-central-1.amazonaws.com"}, hosts)
 }
 
+func TestKiroListAvailableModelsRetriesForbiddenRegionFromEU(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"api_region": "eu-central-1",
+		},
+	}
+	var hosts []string
+	do := func(req *http.Request) (*http.Response, error) {
+		hosts = append(hosts, req.URL.Host)
+		if req.URL.Host == "q.eu-central-1.amazonaws.com" {
+			return &http.Response{
+				StatusCode: http.StatusForbidden,
+				Body:       io.NopCloser(strings.NewReader(`{"message":"forbidden"}`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-sonnet-4.6"}]}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	}
+
+	ids, err := kiroListAvailableModelIDsWithDo(context.Background(), account, "token", do)
+	require.NoError(t, err)
+	require.Equal(t, []string{"claude-sonnet-4.6"}, ids)
+	require.Equal(t, []string{"q.eu-central-1.amazonaws.com", "q.us-east-1.amazonaws.com"}, hosts)
+}
+
+func TestKiroListAvailableModelsOAuthUsesPinnedUsageHeaders(t *testing.T) {
+	oauth := &Account{Platform: PlatformKiro, Type: AccountTypeOAuth}
+	apiKey := &Account{Platform: PlatformKiro, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "ksk_test"}}
+	var oauthReq, apiKeyReq *http.Request
+	do := func(dst **http.Request) kiroModelsDoFunc {
+		return func(req *http.Request) (*http.Response, error) {
+			*dst = req
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-sonnet-4.6"}]}`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}
+	}
+
+	_, err := kiroListAvailableModelIDsWithDo(context.Background(), oauth, "token", do(&oauthReq))
+	require.NoError(t, err)
+	require.Contains(t, oauthReq.Header.Get("User-Agent"), "api/codewhispererstreaming#1.0.34")
+	require.Contains(t, oauthReq.Header.Get("User-Agent"), "aws-sdk-js/1.0.34")
+	require.Contains(t, oauthReq.Header.Get("X-Amz-User-Agent"), "aws-sdk-js/1.0.34")
+	require.Equal(t, "vibe", oauthReq.Header.Get("x-amzn-kiro-agent-mode"))
+	require.Equal(t, "attempt=1; max=1", oauthReq.Header.Get("Amz-Sdk-Request"))
+	oauthUA := oauthReq.Header.Get("User-Agent")
+	require.NotContains(t, oauthUA, "os/darwin")
+	require.True(t, strings.Contains(oauthUA, "os/macos") || strings.Contains(oauthUA, "os/win32"))
+
+	_, err = kiroListAvailableModelIDsWithDo(context.Background(), apiKey, "ksk_test", do(&apiKeyReq))
+	require.NoError(t, err)
+	require.Empty(t, apiKeyReq.Header.Get("x-amzn-kiro-agent-mode"))
+	require.Equal(t, "attempt=1; max=3", apiKeyReq.Header.Get("Amz-Sdk-Request"))
+}
+
 func TestKiroListAvailableModelsAPIKeyOmitsProfileArn(t *testing.T) {
 	account := &Account{
 		Platform: PlatformKiro,

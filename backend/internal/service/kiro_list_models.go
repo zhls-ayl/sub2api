@@ -82,7 +82,7 @@ func kiroListedModelIDs(models []kiroListedModel) []string {
 }
 
 // kiroListAvailableModelIDs 调用 GET https://q.{region}.amazonaws.com/ListAvailableModels。
-// 账号区域返回 403 时再试 eu-central-1。最多翻 10 页。
+// 账号区域返回 403 时，us-east-1 再试 eu-central-1，eu-central-1 再试 us-east-1。最多翻 10 页。
 func kiroListAvailableModelIDs(ctx context.Context, account *Account, token string) ([]string, error) {
 	models, err := kiroListAvailableModels(ctx, account, token)
 	if err != nil {
@@ -130,12 +130,20 @@ func kiroListAvailableModelsWithDo(ctx context.Context, account *Account, token 
 
 	region := kiroAPIRegion(account)
 	models, status, err := kiroListModelsPages(ctx, account, token, region, do)
-	if status == http.StatusForbidden && !strings.EqualFold(region, kiroListModelsFallbackRegion) {
-		fallbackModels, _, fallbackErr := kiroListModelsPages(ctx, account, token, kiroListModelsFallbackRegion, do)
-		if fallbackErr == nil {
-			return fallbackModels, nil
+	if status == http.StatusForbidden {
+		// us-east-1 → eu-central-1 matches upstream. Enterprise accounts whose
+		// api_region is already eu-central-1 still need the reverse hop.
+		fallbackRegion := kiroListModelsFallbackRegion
+		if strings.EqualFold(region, kiroListModelsFallbackRegion) {
+			fallbackRegion = kiroDefaultRegion
 		}
-		return nil, fallbackErr
+		if !strings.EqualFold(region, fallbackRegion) {
+			fallbackModels, _, fallbackErr := kiroListModelsPages(ctx, account, token, fallbackRegion, do)
+			if fallbackErr == nil {
+				return fallbackModels, nil
+			}
+			return nil, fallbackErr
+		}
 	}
 	return models, err
 }
@@ -201,12 +209,24 @@ func buildKiroListModelsRequest(ctx context.Context, account *Account, token, re
 	}
 	accountKey := buildKiroAccountKey(account)
 	machineID := buildKiroMachineID(account)
+	userAgent := kiropkg.BuildRuntimeUserAgent(accountKey, machineID)
+	amzUserAgent := kiropkg.BuildRuntimeAmzUserAgent(accountKey, machineID)
+	sdkRequest := "attempt=1; max=3"
+	oauthList := account != nil && account.Type == AccountTypeOAuth
+	if oauthList {
+		userAgent = kiropkg.BuildUsageRuntimeUserAgent(accountKey, machineID)
+		amzUserAgent = kiropkg.BuildUsageRuntimeAmzUserAgent(accountKey, machineID)
+		sdkRequest = "attempt=1; max=1"
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", kiropkg.BuildRuntimeUserAgent(accountKey, machineID))
-	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRuntimeAmzUserAgent(accountKey, machineID))
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("X-Amz-User-Agent", amzUserAgent)
+	if oauthList {
+		req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+	}
 	req.Header.Set("x-amzn-codewhisperer-optout", "true")
-	req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
+	req.Header.Set("Amz-Sdk-Request", sdkRequest)
 	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.NewString())
 	applyKiroConditionalHeaders(req, account)
 	return req, nil
@@ -217,6 +237,11 @@ func (s *AccountTestService) fetchKiroDirectUpstreamModels(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
+	var repo AccountRepository
+	if s != nil {
+		repo = s.accountRepo
+	}
+	ensureKiroEnterpriseRealProfileArn(ctx, repo, account, token)
 	listed, err := kiroListAvailableModels(ctx, account, token)
 	if err != nil {
 		return nil, newUpstreamModelSyncUpstreamError("Failed to fetch Kiro available models", err)
@@ -233,6 +258,11 @@ func (s *AccountTestService) syncKiroDirectModelCatalog(ctx context.Context, acc
 	if err != nil {
 		return nil, err
 	}
+	var repo AccountRepository
+	if s != nil {
+		repo = s.accountRepo
+	}
+	ensureKiroEnterpriseRealProfileArn(ctx, repo, account, token)
 	listed, err := kiroListAvailableModels(ctx, account, token)
 	if err != nil {
 		return nil, newUpstreamModelSyncUpstreamError("Failed to fetch Kiro available models", err)
