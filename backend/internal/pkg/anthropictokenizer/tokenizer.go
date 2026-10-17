@@ -1,5 +1,7 @@
 // Package anthropictokenizer provides a local port of Anthropic's
 // @anthropic-ai/tokenizer package for rough Claude token estimation.
+// 除参考实现外，本包还承载两种计量用启发式估算器（Algorithm），
+// 供按配置切换计数口径的调用方使用。
 package anthropictokenizer
 
 import (

@@ -1268,6 +1268,29 @@ describe('CreateAccountModal Leonardo accounts', () => {
     const payload = createAccountMock.mock.calls[0]?.[0]
     expect(payload?.type).toBe('oauth')
     expect(payload?.extra?.leonardo_credit_unit_price_usd).toBe(0.0012)
+    // 未设出图上限：写出中性值（不限 / 默认 2 倍）。
+    expect(payload?.extra).toMatchObject({
+      leonardo_max_quality: '',
+      leonardo_max_short_edge: 0,
+      leonardo_max_upscale_factor: 2
+    })
+  })
+
+  it('sends the Leonardo cookie image limits in extra', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="platform-tab-leonardo"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Leonardo cookie')
+    await wrapper.get('[data-testid="leonardo-max-short-edge"]').setValue('1024')
+    await wrapper.get('[data-testid="leonardo-max-upscale-factor"]').setValue('1.5')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="leonardo-cookie-input"]').setValue('__Secure-better-auth.session_token=abc')
+    await wrapper.get('[data-testid="leonardo-create-account"]').trigger('click')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.extra).toMatchObject({ leonardo_max_short_edge: 1024, leonardo_max_upscale_factor: 1.5 })
   })
 
   it('creates the relay account in one step with base_url and api_key', async () => {
@@ -1286,5 +1309,6 @@ describe('CreateAccountModal Leonardo accounts', () => {
     expect(payload?.credentials).toMatchObject({ base_url: 'https://relay.example.com', api_key: 'sk-relay' })
     expect(wrapper.find('[data-testid="leonardo-credit-unit-price-usd"]').exists()).toBe(false)
     expect(payload?.extra?.leonardo_credit_unit_price_usd).toBeUndefined()
+    expect(payload?.extra?.leonardo_max_short_edge).toBeUndefined()
   })
 })

@@ -5344,6 +5344,25 @@
                 </p>
               </div>
 
+              <!-- Kiro 计量算法 -->
+              <div class="border-b border-gray-100 pb-5 dark:border-dark-700 md:col-span-2">
+                <label
+                  for="gateway-kiro-tokenizer"
+                  class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{ t("admin.settings.gatewayForwarding.kiroTokenizer") }}
+                </label>
+                <Select
+                  v-model="form.gateway_kiro_tokenizer"
+                  :options="kiroTokenizerOptions"
+                  data-testid="gateway-kiro-tokenizer"
+                  class="mt-2"
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.gatewayForwarding.kiroTokenizerHint") }}
+                </p>
+              </div>
+
               <!-- Fingerprint Unification -->
               <div class="flex items-center justify-between">
                 <div>
@@ -9191,6 +9210,11 @@ const openaiTTFTModeOptions = computed(() => [
   { value: "semantic", label: t("admin.settings.gatewayForwarding.openaiTTFTModeSemantic") },
   { value: "visible", label: t("admin.settings.gatewayForwarding.openaiTTFTModeVisible") },
 ]);
+const kiroTokenizerOptions = computed(() => [
+  { value: "official", label: t("admin.settings.gatewayForwarding.kiroTokenizerOfficial") },
+  { value: "charclass", label: t("admin.settings.gatewayForwarding.kiroTokenizerCharClass") },
+  { value: "weighted", label: t("admin.settings.gatewayForwarding.kiroTokenizerWeighted") },
+]);
 const grokDefaultBaseURLModeOptions = computed(() => [
   { value: "cli", label: t("admin.settings.gatewayForwarding.grokBaseURLModeCLI") },
   { value: "api", label: t("admin.settings.gatewayForwarding.grokBaseURLModeAPI") },
@@ -10178,6 +10202,7 @@ const form = reactive<SettingsForm>({
   openai_advanced_scheduler_weight_session_sticky: "",
   // Gateway forwarding behavior
   openai_ttft_mode: "semantic",
+  gateway_kiro_tokenizer: "official",
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
   enable_cch_signing: false,
@@ -11837,6 +11862,11 @@ async function saveSettings() {
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling,
       openai_ttft_mode:
         form.openai_ttft_mode === "visible" ? "visible" : "semantic",
+      gateway_kiro_tokenizer: ["official", "charclass", "weighted"].includes(
+        form.gateway_kiro_tokenizer,
+      )
+        ? form.gateway_kiro_tokenizer
+        : "official",
       enable_fingerprint_unification: form.enable_fingerprint_unification,
       enable_metadata_passthrough: form.enable_metadata_passthrough,
       enable_cch_signing: form.enable_cch_signing,

@@ -31,7 +31,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	if isKiroDirectModeAccount(account) {
-		inputTokens := estimateKiroInputTokens(ctx, parsed.Body.Bytes())
+		inputTokens := estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), parsed.Body.Bytes())
 		if inputTokens < 1 {
 			inputTokens = 1
 		}

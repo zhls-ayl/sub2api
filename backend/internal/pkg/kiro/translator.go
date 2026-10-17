@@ -119,6 +119,10 @@ type KiroRequestContext struct {
 	// 没有对应入口,不兜底会让响应体 usage.input_tokens 输出 0。
 	// 为 0 时不生效（保持原行为）。
 	EstimatedInputTokens int
+	// TokenizerAlgorithm 是本次请求的 token 计量算法，仅用于 usage 输出兜底
+	// 估算的计数口径。零值归一为官方精确（official）。max_tokens 截断等
+	// 功能行为始终使用官方算法，不随此字段变化。
+	TokenizerAlgorithm anthropictokenizer.Algorithm
 }
 
 type KiroBuildResult struct {
@@ -628,7 +632,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
-	content, toolUses, usage, stopReason, err := parseEventStream(body)
+	content, toolUses, usage, stopReason, err := parseEventStream(body, requestCtx.TokenizerAlgorithm)
 	if err != nil {
 		return nil, err
 	}
@@ -1374,7 +1378,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return nil, err
 	}
 	if usage.OutputTokens == 0 {
-		if est := anthropictokenizer.CountTokens(outputTextBuf.String()); est > 0 {
+		if est := requestCtx.TokenizerAlgorithm.CountTokens(outputTextBuf.String()); est > 0 {
 			usage.OutputTokens = est
 		}
 	}
@@ -3166,7 +3170,7 @@ func blockToMap(block gjson.Result) map[string]any {
 	return result
 }
 
-func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, error) {
+func parseEventStream(body io.Reader, alg anthropictokenizer.Algorithm) (string, []KiroToolUse, Usage, string, error) {
 	reader := bufio.NewReader(body)
 	var content strings.Builder
 	var toolUses []KiroToolUse
@@ -3276,7 +3280,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 				_, _ = outputBuf.Write(b)
 			}
 		}
-		if est := anthropictokenizer.CountTokens(outputBuf.String()); est > 0 {
+		if est := alg.CountTokens(outputBuf.String()); est > 0 {
 			usage.OutputTokens = est
 		}
 	}
@@ -3406,6 +3410,8 @@ func applyMaxOutputTokensToTextBlocks(blocks []map[string]any, maxTokens int) ([
 	}
 	remaining := maxTokens
 	out := make([]map[string]any, 0, len(blocks))
+	// max_tokens 截断是官方 token 语义的功能行为：始终使用官方算法计数，
+	// 不随计量口径（KiroRequestContext.TokenizerAlgorithm）膨胀而提前截断。
 	for _, block := range blocks {
 		if block["type"] != "text" {
 			out = append(out, block)
