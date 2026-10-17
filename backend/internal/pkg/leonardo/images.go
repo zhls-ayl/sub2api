@@ -46,8 +46,9 @@ type ImageOptions struct {
 	Prompt        string
 	// Quality：LOW / MEDIUM / HIGH；空或 auto 折 MEDIUM。
 	Quality string
-	// Size 是 OpenAI Images 的 size 入参（"auto" 或 "WxH"），原样透传；
-	// 宽高是否在上游允许值清单内由上游校验。
+	// Size 是 OpenAI Images 的 size 入参（"auto" 或 "WxH"），即交付尺寸。未触发
+	// Limits 时原样透传，宽高是否在上游允许值清单内由上游校验；触发时由
+	// PlanImage 挑一个同比例的更小出图尺寸。
 	Size string
 	// ReferenceImageIDs 是已上传过审的 init image id（1-6 张，有序）。
 	ReferenceImageIDs []string
@@ -58,6 +59,8 @@ type ImageOptions struct {
 	// Transparent 为 true 时请求透明背景。透明效果受提示词影响：提示词里描述
 	// 背景会得到不理想的结果（上游行为，网关不改写提示词）。
 	Transparent bool
+	// Limits 是账号级的质量与尺寸上限（零值 = 不限），见 PlanImage。
+	Limits ImageLimits
 }
 
 // NormalizeQuality 归一化 quality 入参（大小写不敏感；空与 auto → MEDIUM）。
@@ -103,8 +106,16 @@ func ResolveImageSlot(size string) (*ImageSlot, error) {
 	if width <= 0 || height <= 0 {
 		return nil, NewRequestError(fmt.Sprintf("unsupported image size %q", size))
 	}
+	if err := checkImageDimensions(width, height); err != nil {
+		return nil, err
+	}
+	return &ImageSlot{Width: width, Height: height}, nil
+}
+
+// checkImageDimensions 检查 OpenAI 的像素与比例限制（宽高须为正数）。
+func checkImageDimensions(width, height int) error {
 	if pixels := width * height; pixels < minImagePixels || pixels > maxImagePixels {
-		return nil, NewRequestError(fmt.Sprintf(
+		return NewRequestError(fmt.Sprintf(
 			"unsupported image size %dx%d: total pixels must be between %d and %d (got %d)",
 			width, height, minImagePixels, maxImagePixels, pixels))
 	}
@@ -113,10 +124,10 @@ func ResolveImageSlot(size string) (*ImageSlot, error) {
 		longEdge, shortEdge = shortEdge, longEdge
 	}
 	if longEdge > maxImageAspectRatio*shortEdge {
-		return nil, NewRequestError(fmt.Sprintf(
+		return NewRequestError(fmt.Sprintf(
 			"unsupported image size %dx%d: aspect ratio must not exceed %d:1", width, height, maxImageAspectRatio))
 	}
-	return &ImageSlot{Width: width, Height: height}, nil
+	return nil
 }
 
 // MaxImageQuantity 是一次 Generate 的张数上限（网页版官方上限 8）。
@@ -125,39 +136,42 @@ const MaxImageQuantity = 8
 // BuildImageRequest 构造 gpt-image 系列的 Generate mutation request 变量。
 // 参考图超过 6 张、张数超过 MaxImageQuantity 返回错误（上游上限）。
 func BuildImageRequest(opts ImageOptions) (*GenerateRequest, error) {
+	request, _, err := BuildImagePlanRequest(opts)
+	return request, err
+}
+
+// BuildImagePlanRequest 同 BuildImageRequest，额外返回尺寸与质量决策：
+// width / height 用 plan.Source，quality 用 plan.Quality。
+func BuildImagePlanRequest(opts ImageOptions) (*GenerateRequest, *ImagePlan, error) {
 	upstreamModel := strings.TrimSpace(opts.UpstreamModel)
 	if upstreamModel == "" {
 		upstreamModel = GPTImage2Model
 	}
-	quality, err := NormalizeQuality(opts.Quality, opts.ExtendedQuality)
+	plan, err := PlanImage(opts)
 	if err != nil {
-		return nil, err
-	}
-	slot, err := ResolveImageSlot(opts.Size)
-	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	prompt := strings.TrimSpace(opts.Prompt)
 	if prompt == "" {
-		return nil, NewRequestError("prompt is required")
+		return nil, nil, NewRequestError("prompt is required")
 	}
 	if len(opts.ReferenceImageIDs) > 6 {
-		return nil, NewRequestError("leonardo image models accept at most 6 image references")
+		return nil, nil, NewRequestError("leonardo image models accept at most 6 image references")
 	}
 	quantity := opts.Quantity
 	if quantity <= 0 {
 		quantity = 1
 	}
 	if quantity > MaxImageQuantity {
-		return nil, NewRequestError(fmt.Sprintf("leonardo image models accept at most %d images per request", MaxImageQuantity))
+		return nil, nil, NewRequestError(fmt.Sprintf("leonardo image models accept at most %d images per request", MaxImageQuantity))
 	}
 
 	params := GenerateParams{
-		Width:         slot.Width,
-		Height:        slot.Height,
+		Width:         plan.Source.Width,
+		Height:        plan.Source.Height,
 		Prompt:        prompt,
 		Quantity:      quantity,
-		Quality:       quality,
+		Quality:       plan.Quality,
 		PromptEnhance: "OFF",
 		StyleIDs:      []string{StyleNoneID},
 		Transparency:  opts.Transparent,
@@ -167,7 +181,7 @@ func BuildImageRequest(opts ImageOptions) (*GenerateRequest, error) {
 		for _, id := range opts.ReferenceImageIDs {
 			id = strings.TrimSpace(id)
 			if id == "" {
-				return nil, NewRequestError("reference image id is empty")
+				return nil, nil, NewRequestError("reference image id is empty")
 			}
 			guidance := ImageReferenceGuidance{Strength: GuidanceStrengthMID}
 			guidance.Image.ID = id
@@ -178,7 +192,7 @@ func BuildImageRequest(opts ImageOptions) (*GenerateRequest, error) {
 	}
 	// public 默认关闭：leo_proxy 的 gpt-image-2 构造器用 public=true，但与其
 	// 它图片模型（nano 系 public=false）不一致；公开发布非生成所需。
-	return &GenerateRequest{Model: upstreamModel, Public: false, Parameters: params}, nil
+	return &GenerateRequest{Model: upstreamModel, Public: false, Parameters: params}, plan, nil
 }
 
 // UploadExtensionForContentType 按内容类型推断上传扩展名。

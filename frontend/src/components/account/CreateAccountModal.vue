@@ -1332,6 +1332,41 @@
         />
         <p class="input-hint">{{ t('admin.accounts.leonardoCreditUnitPriceUsdHint') }}</p>
       </div>
+      <!-- Leonardo Cookie 账号的出图上限：超过时按上限出图，再超分回请求尺寸，按交付尺寸计费 -->
+      <div v-if="form.platform === 'leonardo' && accountCategory === 'oauth-based'" class="space-y-3" data-testid="leonardo-image-limits">
+        <div>
+          <label class="input-label">{{ t('admin.accounts.leonardoMaxQuality') }}</label>
+          <Select v-model="leonardoImageLimits.maxQuality" :options="leonardoMaxQualityOptions" data-testid="leonardo-max-quality" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="input-label">{{ t('admin.accounts.leonardoMaxShortEdge') }}</label>
+            <input
+              v-model.number="leonardoImageLimits.maxShortEdge"
+              type="number"
+              min="0"
+              step="16"
+              class="input"
+              placeholder="0"
+              data-testid="leonardo-max-short-edge"
+            />
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.accounts.leonardoMaxUpscaleFactor') }}</label>
+            <input
+              v-model.number="leonardoImageLimits.maxUpscaleFactor"
+              type="number"
+              min="1"
+              max="4"
+              step="0.1"
+              class="input"
+              placeholder="2"
+              data-testid="leonardo-max-upscale-factor"
+            />
+          </div>
+        </div>
+        <p class="input-hint">{{ t('admin.accounts.leonardoImageLimitsHint') }}</p>
+      </div>
       <!-- Leonardo 外部中转(API Key + Base URL)：转发到 OpenAI 兼容出图上游，作为原生账号全部故障时的兜底 -->
       <div v-if="form.platform === 'leonardo' && accountCategory === 'apikey-relay'" class="space-y-4" data-testid="leonardo-relay-fields">
         <div>
@@ -4908,6 +4943,12 @@ import type {
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
+import {
+  LEONARDO_MAX_QUALITY_VALUES,
+  applyLeonardoImageLimitsToExtra,
+  defaultLeonardoImageLimits,
+  type LeonardoImageLimitsForm
+} from '@/utils/leonardoImageLimits'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
@@ -5555,6 +5596,11 @@ const kiroImportTokenPlaceholder = computed(() => {
 // Leonardo：长期凭据是浏览器 cookie；粘贴支持完整 k=v 串或裸 session token。
 const leonardoCookie = ref('')
 const leonardoCreditUnitPriceUsd = ref(0)
+const leonardoImageLimits = ref<LeonardoImageLimitsForm>(defaultLeonardoImageLimits())
+const leonardoMaxQualityOptions = computed(() => [
+  { value: '', label: t('admin.accounts.leonardoMaxQualityUnlimited') },
+  ...LEONARDO_MAX_QUALITY_VALUES.map((value) => ({ value, label: value }))
+])
 const kiroUpstreamIDs = ref<Record<string, string>>({})
 const mergeKiroUpstreamIDs = (ids: Record<string, string>) => {
   kiroUpstreamIDs.value = { ...kiroUpstreamIDs.value, ...ids }
@@ -6597,6 +6643,7 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
 const resetForm = () => {
   leonardoCookie.value = ''
   leonardoCreditUnitPriceUsd.value = 0
+  leonardoImageLimits.value = defaultLeonardoImageLimits()
   step.value = 1
   form.name = ''
   form.notes = ''
@@ -7467,7 +7514,7 @@ const createAccountAndFinish = async (
     const leonardoExtra: Record<string, unknown> = { ...(finalExtra || {}) }
     const unitPrice = Number(leonardoCreditUnitPriceUsd.value ?? 0)
     leonardoExtra.leonardo_credit_unit_price_usd = Number.isFinite(unitPrice) ? unitPrice : 0
-    finalExtra = leonardoExtra
+    finalExtra = applyLeonardoImageLimitsToExtra(leonardoExtra, leonardoImageLimits.value)
   }
   if (platform === 'grok') {
     if (!credentials.base_url) {

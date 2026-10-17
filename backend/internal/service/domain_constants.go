@@ -667,6 +667,10 @@ const (
 	SettingKeyOpenAITTFTMode = "openai_ttft_mode"
 	OpenAITTFTModeSemantic   = "semantic"
 	OpenAITTFTModeVisible    = "visible"
+	// SettingKeyGatewayKiroTokenizer 控制 Kiro 渠道的 token 计量算法
+	// （official/charclass/weighted），仅影响 usage 与计费口径，不影响上游
+	// 请求与 max_tokens 截断行为。默认 official。
+	SettingKeyGatewayKiroTokenizer = "gateway_kiro_tokenizer"
 	// SettingKeyEnableFingerprintUnification 是否统一 OAuth 账号的 X-Stainless-* 指纹头（默认 true）
 	SettingKeyEnableFingerprintUnification = "enable_fingerprint_unification"
 	// SettingKeyEnableMetadataPassthrough 是否透传客户端原始 metadata.user_id（默认 false）

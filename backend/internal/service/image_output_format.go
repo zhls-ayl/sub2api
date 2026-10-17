@@ -73,6 +73,11 @@ func transcodeImage(data []byte, format string, compression *int) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("decode image: %w", err)
 	}
+	return encodeImage(img, format, imageJPEGQuality(compression))
+}
+
+// encodeImage 把 img 编码为 png 或 jpeg（jpegQuality 只对 jpeg 生效）。
+func encodeImage(img image.Image, format string, jpegQuality int) ([]byte, error) {
 	var buf bytes.Buffer
 	switch format {
 	case imageOutputFormatPNG:
@@ -82,7 +87,7 @@ func transcodeImage(data []byte, format string, compression *int) ([]byte, error
 			return nil, fmt.Errorf("encode png: %w", err)
 		}
 	case imageOutputFormatJPEG:
-		if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: imageJPEGQuality(compression)}); err != nil {
+		if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: jpegQuality}); err != nil {
 			return nil, fmt.Errorf("encode jpeg: %w", err)
 		}
 	default:

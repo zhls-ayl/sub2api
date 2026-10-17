@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +31,7 @@ func TestGatewayServiceForwardCountTokensKiroDirectUsesLocalEstimate(t *testing.
 		],
 		"tools":[{"name":"lookup","description":"Look up weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}]
 	}`)
-	want := estimateKiroInputTokens(context.Background(), body)
+	want := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, body)
 	require.Greater(t, want, 1)
 
 	accounts := []*Account{
@@ -91,7 +92,7 @@ func TestGatewayServiceForwardCountTokensKiroImageUsesVisualEstimate(t *testing.
 
 	dataURL := kiroPNGDataURL(t, 512, 512, color.RGBA{R: 25, G: 50, B: 75, A: 255})
 	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"` + dataURL + `"}}]}]}`)
-	want := estimateKiroInputTokens(context.Background(), body)
+	want := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, body)
 	require.GreaterOrEqual(t, want, 350)
 	require.Less(t, want, len(dataURL)/2, "base64 payload must not be counted as text")
 

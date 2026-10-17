@@ -169,7 +169,7 @@ func (s *GatewayService) ForwardAsResponses(
 		if parsed != nil {
 			group = parsed.Group
 		}
-		cachePlan := s.prepareKiroResponsesCacheEmulationUsage(ctx, account, group, body, mappedModel, estimateKiroInputTokens(ctx, anthropicBody))
+		cachePlan := s.prepareKiroResponsesCacheEmulationUsage(ctx, account, group, body, mappedModel, estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), anthropicBody))
 		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, parsed, anthropicBody, mappedModel, originalModel, c.Request.Header, group, cachePlan)
 		if err != nil {
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())

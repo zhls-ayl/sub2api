@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -473,6 +474,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		return nil, fmt.Errorf("%s must be one of: %s/%s", SettingKeyOpenAITTFTMode, OpenAITTFTModeSemantic, OpenAITTFTModeVisible)
 	}
 	updates[SettingKeyOpenAITTFTMode] = mode
+	kiroTokenizer, err := normalizeGatewayKiroTokenizer(settings.GatewayKiroTokenizer)
+	if err != nil {
+		return nil, err
+	}
+	updates[SettingKeyGatewayKiroTokenizer] = kiroTokenizer
 	updates[SettingKeyEnableFingerprintUnification] = strconv.FormatBool(settings.EnableFingerprintUnification)
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
 	updates[SettingKeyEnableCCHSigning] = strconv.FormatBool(settings.EnableCCHSigning)
@@ -737,6 +743,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	gatewayForwardingSF.Forget("gateway_forwarding")
 	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 		openAITTFTMode:                   normalizeOpenAITTFTMode(settings.OpenAITTFTMode),
+		kiroTokenizer:                    anthropictokenizer.ParseAlgorithm(settings.GatewayKiroTokenizer),
 		fingerprintUnification:           settings.EnableFingerprintUnification,
 		metadataPassthrough:              settings.EnableMetadataPassthrough,
 		cchSigning:                       settings.EnableCCHSigning,

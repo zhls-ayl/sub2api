@@ -282,8 +282,10 @@ func TestResolve_KiroGPT56UsesChannelPricingBeforeDefaultOpenAIPricing(t *testin
 
 func TestResolve_KiroGPT56FallsBackToDefaultOpenAIPricingWhenNoChannelPrice(t *testing.T) {
 	r := newResolverWithPlatformChannel(t, PlatformKiro, nil)
-	// This case needs the production OpenAI fallback catalog; the shared fixture only seeds Claude.
-	r.billingService.initFallbackPricing()
+	// The shared helper only seeds Claude (plus a fork gpt-5.6 stub). This case
+	// needs the production OpenAI fallback catalog, so use the built-in
+	// BillingService. NewBillingService calls initFallbackPricing itself.
+	r.billingService = NewBillingService(nil, nil)
 
 	resolved := r.Resolve(context.Background(), PricingInput{
 		Model:   "gpt-5.6-luna",

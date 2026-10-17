@@ -462,6 +462,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 			if err := ValidateLeonardoCreditUnitPriceFromExtra(account.Extra); err != nil {
 				return nil, err
 			}
+			if err := ValidateLeonardoImageLimitsFromExtra(account.Extra); err != nil {
+				return nil, err
+			}
 		}
 		NormalizeFixedQuotaWindows(account.Extra)
 	}
@@ -747,6 +750,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		if isLeonardoCookieAccount(account) {
 			if err := ValidateLeonardoCreditUnitPriceFromExtra(account.Extra); err != nil {
+				return nil, err
+			}
+			if err := ValidateLeonardoImageLimitsFromExtra(account.Extra); err != nil {
 				return nil, err
 			}
 		}

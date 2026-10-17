@@ -244,6 +244,7 @@ type UpdateSettingsRequest struct {
 
 	// Gateway forwarding behavior
 	OpenAITTFTMode                         *string `json:"openai_ttft_mode"`
+	GatewayKiroTokenizer                   *string `json:"gateway_kiro_tokenizer"`
 	EnableFingerprintUnification           *bool   `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough              *bool   `json:"enable_metadata_passthrough"`
 	EnableCCHSigning                       *bool   `json:"enable_cch_signing"`
@@ -1743,6 +1744,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpenAITTFTMode
 			}
 			return previousSettings.OpenAITTFTMode
+		}(),
+		GatewayKiroTokenizer: func() string {
+			if req.GatewayKiroTokenizer != nil {
+				return *req.GatewayKiroTokenizer
+			}
+			return previousSettings.GatewayKiroTokenizer
 		}(),
 		EnableMetadataPassthrough: func() bool {
 			if req.EnableMetadataPassthrough != nil {

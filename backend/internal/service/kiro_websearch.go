@@ -209,7 +209,7 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 		currentBody = anthropicBody
 	}
 
-	inputTokens := estimateKiroInputTokens(ctx, anthropicBody)
+	inputTokens := estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), anthropicBody)
 	currentToolUseID := "srvtoolu_" + kiropkg.GenerateToolUseID()
 	searches := make([]kiropkg.SearchIndicator, 0, 2)
 	requestID := ""
@@ -254,6 +254,7 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 			return kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, requestModel, kiropkg.KiroRequestContext{
 				CacheEmulationUsage:  cacheUsage.toKiroUsage(),
 				EstimatedInputTokens: inputTokens,
+				TokenizerAlgorithm:    s.kiroMeteringAlgorithm(ctx),
 			})
 		}()
 		if parseErr != nil {
