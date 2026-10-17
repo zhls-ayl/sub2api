@@ -58,6 +58,48 @@ func sleepKiroRetry(ctx context.Context, attempt int) error {
 	return kiroRetrySleep(ctx, kiroRetryBackoffDelay(attempt))
 }
 
+// kiroPromptTooLongError 是客户端可见的上下文超限。不是账号故障，不触发换号。
+type kiroPromptTooLongError struct {
+	message string
+}
+
+func (e *kiroPromptTooLongError) Error() string {
+	if e == nil || !strings.HasPrefix(e.message, "prompt is too long") {
+		return "prompt is too long"
+	}
+	return e.message
+}
+
+func newKiroTokenPromptTooLongError(tokens int, maximum int64) *kiroPromptTooLongError {
+	return &kiroPromptTooLongError{
+		message: fmt.Sprintf("prompt is too long: %d tokens > %d maximum", tokens, maximum),
+	}
+}
+
+func newKiroBytePromptTooLongError(limit int) *kiroPromptTooLongError {
+	if limit <= 0 {
+		return &kiroPromptTooLongError{message: "prompt is too long"}
+	}
+	return &kiroPromptTooLongError{
+		message: fmt.Sprintf("prompt is too long: payload exceeds %d bytes", limit),
+	}
+}
+
+func newKiroUpstreamPromptTooLongError(tokens int, maximum int64) *kiroPromptTooLongError {
+	if maximum > 0 && int64(tokens) > maximum {
+		return newKiroTokenPromptTooLongError(tokens, maximum)
+	}
+	return &kiroPromptTooLongError{message: "prompt is too long"}
+}
+
+func kiroPromptTooLongFrom(err error) (*kiroPromptTooLongError, bool) {
+	var tooLong *kiroPromptTooLongError
+	if !errors.As(err, &tooLong) || tooLong == nil {
+		return nil, false
+	}
+	return tooLong, true
+}
+
 func resolveKiroUpstreamModel(mappedModel string) string {
 	upstreamModel := kiropkg.MapModel(mappedModel)
 	if strings.TrimSpace(upstreamModel) == "" {
@@ -88,6 +130,13 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		zap.Bool("has_profile_arn", strings.TrimSpace(account.GetCredential("profile_arn")) != ""),
 	)
 
+	if err := s.rejectKiroPromptIfOverModelLimit(ctx, account, body, originalModel, mappedModel); err != nil {
+		if tooLong, ok := respondKiroAnthropicPromptTooLong(c, account, err); ok {
+			return nil, tooLong
+		}
+		return nil, err
+	}
+
 	if s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, body) {
 		parsedForEmulation, err := parsed.CloneForBody(body)
 		if err != nil {
@@ -100,6 +149,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if parsed.Stream {
 		resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group, nil)
 		if err != nil {
+			if tooLong, ok := respondKiroAnthropicPromptTooLong(c, account, err); ok {
+				return nil, tooLong
+			}
 			var failoverErr *UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -183,6 +235,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				Duration:      time.Since(startTime),
 			}, nil
 		default:
+			if tooLong, ok := respondKiroAnthropicPromptTooLong(c, account, webSearchErr); ok {
+				return nil, tooLong
+			}
 			var httpErr *kiroWebSearchHTTPError
 			if errors.As(webSearchErr, &httpErr) && httpErr.Response != nil {
 				return nil, s.handleKiroHTTPError(ctx, httpErr.Response, c, account, mappedModel, body)
@@ -214,6 +269,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	inputTokens := estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), body)
 	resp, requestCtx, err := s.executeKiroUpstreamWithParsed(ctx, account, parsed, body, mappedModel, originalModel, token, c.Request.Header)
 	if err != nil {
+		if tooLong, ok := respondKiroAnthropicPromptTooLong(c, account, err); ok {
+			return nil, tooLong
+		}
 		var failoverErr *UpstreamFailoverError
 		if errors.As(err, &failoverErr) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -285,6 +343,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	// API Key 模式下 GetAccessToken 返回 tokenType "apikey"(无需刷新)。
 	if tokenType != "oauth" && tokenType != "apikey" {
 		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
+	}
+	if err := s.rejectKiroPromptIfOverModelLimit(ctx, account, anthropicBody, requestModel, mappedModel); err != nil {
+		return nil, 0, err
 	}
 
 	// 客户端断开不应取消仍在收集计费用量的上游读取；detachStreamUpstreamContext
@@ -367,6 +428,9 @@ func (s *GatewayService) executeKiroUpstream(ctx context.Context, account *Accou
 
 func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, kiropkg.KiroRequestContext, error) {
 	var requestCtx kiropkg.KiroRequestContext
+	if err := s.rejectKiroPromptIfOverModelLimit(ctx, account, anthropicBody, requestModel, mappedModel); err != nil {
+		return nil, requestCtx, err
+	}
 	mode := kiroEndpointModeForRequest(account, parsed)
 	s.ensureKiroProfileArnForRequest(ctx, account, token, mode)
 	accountKey := buildKiroAccountKey(account)
@@ -533,6 +597,12 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				}
 				classification := classifyKiroHTTPError(resp.StatusCode, string(respBody))
 				logKiroBadRequestClassification(classification, account, mappedModel, resp.Header, respBody)
+				if classification.Category == kiroErrorContentLength {
+					return nil, requestCtx, newKiroUpstreamPromptTooLongError(
+						estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), anthropicBody),
+						kiroStoredMaxInputTokens(account, requestModel, mappedModel, modelID),
+					)
+				}
 				resetHTTPResponseBody(resp, respBody)
 				return resp, requestCtx, nil
 			}
@@ -604,8 +674,12 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArn(ctx context.Context, 
 	_ = ctx
 	_ = token
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
+	buildResult, err := buildKiroUpstreamPayload(account, anthropicBody, modelID, profileArn, headers, requestModel)
 	if err != nil {
+		var tooLarge *kiropkg.PayloadTooLargeError
+		if errors.As(err, &tooLarge) {
+			return nil, newKiroBytePromptTooLongError(tooLarge.Limit)
+		}
 		return nil, err
 	}
 	if stableID := stableKiroConversationID(account, parsed, anthropicBody, modelID, profileArn); stableID != "" {
@@ -712,6 +786,19 @@ func hashKiroLogString(value string) string {
 		return ""
 	}
 	return strconv.FormatUint(xxhash.Sum64String(value), 36)
+}
+
+// buildKiroUpstreamPayload 用账号已同步的 maxOutputTokens 截断 max_tokens。
+// 没有记录时 outputLimit 为 0，payload 构建保持原来的按模型名猜测。
+func buildKiroUpstreamPayload(account *Account, anthropicBody []byte, modelID, profileArn string, headers http.Header, requestModels ...string) (*kiropkg.KiroBuildResult, error) {
+	models := make([]string, 0, len(requestModels)+1)
+	models = append(models, modelID)
+	models = append(models, requestModels...)
+	outputLimit := int(kiroStoredMaxOutputTokens(account, models...))
+	if outputLimit < 0 {
+		outputLimit = 0
+	}
+	return kiropkg.BuildKiroPayloadWithOutputLimit(anthropicBody, modelID, profileArn, "AI_EDITOR", headers, outputLimit)
 }
 
 func prepareKiroPayloadBodyForRequestModel(anthropicBody []byte, requestModel string) []byte {
@@ -837,6 +924,48 @@ func (s *GatewayService) markKiroInvalidModelRateLimited(ctx context.Context, ac
 	)
 }
 
+func (s *GatewayService) rejectKiroPromptIfOverModelLimit(ctx context.Context, account *Account, body []byte, models ...string) error {
+	maximum := kiroStoredMaxInputTokens(account, models...)
+	if maximum <= 0 {
+		return nil
+	}
+	tokens := estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), body)
+	if tokens <= 0 || int64(tokens) <= maximum {
+		return nil
+	}
+	return newKiroTokenPromptTooLongError(tokens, maximum)
+}
+
+func respondKiroAnthropicPromptTooLong(c *gin.Context, account *Account, err error) (*kiroPromptTooLongError, bool) {
+	tooLong, ok := kiroPromptTooLongFrom(err)
+	if !ok {
+		return nil, false
+	}
+	if c == nil {
+		return tooLong, true
+	}
+	message := tooLong.Error()
+	if account != nil {
+		setOpsUpstreamError(c, http.StatusBadRequest, message, "")
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: http.StatusBadRequest,
+			Kind:               "http_error",
+			Message:            message,
+		})
+	}
+	c.JSON(http.StatusBadRequest, gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":    "invalid_request_error",
+			"message": message,
+		},
+	})
+	return tooLong, true
+}
+
 func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, mappedModel string, requestBody []byte) error {
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
@@ -847,6 +976,14 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 	classification := classifyKiroHTTPError(resp.StatusCode, string(respBody))
 	if resp.StatusCode == http.StatusBadRequest {
 		logKiroBadRequestClassification(classification, account, "", resp.Header, respBody)
+	}
+	if classification.Category == kiroErrorContentLength {
+		tooLong := newKiroUpstreamPromptTooLongError(
+			estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), requestBody),
+			kiroStoredMaxInputTokens(account, mappedModel, gjson.GetBytes(requestBody, "model").String()),
+		)
+		respondKiroAnthropicPromptTooLong(c, account, tooLong)
+		return tooLong
 	}
 	if classification.Category == kiroErrorMonthlyRequest {
 		s.markKiroMonthlyRequestCountRateLimited(ctx, account, string(respBody))

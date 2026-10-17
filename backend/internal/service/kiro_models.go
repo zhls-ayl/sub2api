@@ -17,8 +17,9 @@ import (
 )
 
 type kiroAvailableModel struct {
-	ModelID   string `json:"modelId"`
-	ModelName string `json:"modelName"`
+	ModelID     string               `json:"modelId"`
+	ModelName   string               `json:"modelName"`
+	TokenLimits kiroModelTokenLimits `json:"tokenLimits"`
 }
 
 type kiroAvailableModelsResponse struct {
@@ -28,6 +29,14 @@ type kiroAvailableModelsResponse struct {
 }
 
 func (s *AccountTestService) fetchKiroUpstreamModels(ctx context.Context, account *Account) ([]string, error) {
+	listed, err := s.fetchKiroUpstreamListedModels(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	return kiroListedModelIDs(listed), nil
+}
+
+func (s *AccountTestService) fetchKiroUpstreamListedModels(ctx context.Context, account *Account) ([]kiroListedModel, error) {
 	if account == nil {
 		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
 	}
@@ -97,7 +106,7 @@ func (s *AccountTestService) kiroModelsAccessToken(ctx context.Context, account 
 	return token, nil
 }
 
-func (s *AccountTestService) doKiroListAvailableModels(ctx context.Context, account *Account, endpoint, token, profileArn string) ([]string, error) {
+func (s *AccountTestService) doKiroListAvailableModels(ctx context.Context, account *Account, endpoint, token, profileArn string) ([]kiroListedModel, error) {
 	reqURL, err := url.Parse(endpoint + "/ListAvailableModels")
 	if err != nil {
 		return nil, fmt.Errorf("build kiro models url failed: %w", err)
@@ -135,18 +144,18 @@ func (s *AccountTestService) doKiroListAvailableModels(ctx context.Context, acco
 		return nil, fmt.Errorf("create kiro models client failed: %w", err)
 	}
 
-	models := make([]string, 0, 16)
+	models := make([]kiroListedModel, 0, 16)
 	seen := make(map[string]struct{}, 16)
-	add := func(id string) {
-		id = strings.TrimSpace(id)
-		if id == "" {
+	add := func(id string, limits kiroModelTokenLimits) {
+		listed, ok := kiroListedModelFrom(id, limits)
+		if !ok {
 			return
 		}
-		if _, ok := seen[id]; ok {
+		if _, exists := seen[listed.ID]; exists {
 			return
 		}
-		seen[id] = struct{}{}
-		models = append(models, id)
+		seen[listed.ID] = struct{}{}
+		models = append(models, listed)
 	}
 
 	for page := 0; page < 8; page++ {
@@ -167,10 +176,10 @@ func (s *AccountTestService) doKiroListAvailableModels(ctx context.Context, acco
 			return nil, fmt.Errorf("decode kiro models response failed: %w", err)
 		}
 		if parsed.DefaultModel != nil {
-			add(parsed.DefaultModel.ModelID)
+			add(parsed.DefaultModel.ModelID, parsed.DefaultModel.TokenLimits)
 		}
 		for _, model := range parsed.Models {
-			add(model.ModelID)
+			add(model.ModelID, model.TokenLimits)
 		}
 		next := strings.TrimSpace(parsed.NextToken)
 		if next == "" {

@@ -217,12 +217,11 @@ func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, accou
 		if account.Type == AccountTypeOAuth {
 			// Preserve OAuth profile resolution and regional 403 recovery while
 			// exposing the same public aliases and raw model IDs as direct API keys.
-			ids, err := s.fetchKiroUpstreamModels(ctx, account)
+			listed, err := s.fetchKiroUpstreamListedModels(ctx, account)
 			if err != nil {
 				return nil, err
 			}
-			models, metadata := kiroPublicCatalog(ids)
-			return &UpstreamModelCatalog{Models: models, Metadata: metadata}, nil
+			return s.kiroCatalogFromListed(ctx, account, listed)
 		}
 		return s.syncKiroDirectModelCatalog(ctx, account)
 	}

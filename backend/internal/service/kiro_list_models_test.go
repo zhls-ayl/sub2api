@@ -119,6 +119,85 @@ func TestKiroListAvailableModelsAPIKeyOmitsProfileArn(t *testing.T) {
 	require.Equal(t, []string{"claude-opus-5", "claude-opus-5-thinking"}, kiroSyncPublicModelNames(ids))
 }
 
+func TestKiroListAvailableModelsParsesTokenLimits(t *testing.T) {
+	account := &Account{Platform: PlatformKiro, Type: AccountTypeAPIKey}
+	do := func(req *http.Request) (*http.Response, error) {
+		body := `{
+			"models":[
+				{"modelId":"claude-opus-4.6","tokenLimits":{"maxInputTokens":1000000,"maxOutputTokens":64000}},
+				{"modelId":"claude-haiku-4.5","tokenLimits":{"maxInputTokens":200000,"maxOutputTokens":64000}},
+				{"modelId":"deepseek-3.2","tokenLimits":{"maxInputTokens":164000,"maxOutputTokens":-1}},
+				{"modelId":"claude-sonnet-4.5"}
+			]
+		}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	}
+
+	listed, err := kiroListAvailableModelsWithDo(context.Background(), account, "ksk_test", do)
+	require.NoError(t, err)
+	require.Equal(t, []kiroListedModel{
+		{ID: "claude-opus-4.6", MaxInputTokens: 1_000_000, MaxOutputTokens: 64_000},
+		{ID: "claude-haiku-4.5", MaxInputTokens: 200_000, MaxOutputTokens: 64_000},
+		{ID: "deepseek-3.2", MaxInputTokens: 164_000},
+		{ID: "claude-sonnet-4.5"},
+	}, listed)
+
+	names, metadata := kiroPublicCatalogFromListed(listed)
+	require.Contains(t, names, "claude-opus-4-6")
+	require.Contains(t, names, "claude-opus-4-6-thinking")
+	require.Contains(t, names, "claude-haiku-4-5-20251001")
+	require.Equal(t, int64(1_000_000), metadata["claude-opus-4-6"].ContextWindow)
+	require.Equal(t, int64(1_000_000), metadata["claude-opus-4-6"].MaxContextWindow)
+	require.Equal(t, int64(64_000), metadata["claude-opus-4-6"].MaxOutputTokens)
+	require.Equal(t, int64(1_000_000), metadata["claude-opus-4-6-thinking"].ContextWindow)
+	require.Equal(t, int64(1_000_000), metadata["claude-opus-4.6"].ContextWindow)
+	require.Equal(t, int64(200_000), metadata["claude-haiku-4-5-20251001-thinking"].ContextWindow)
+	require.Equal(t, int64(164_000), metadata["deepseek-3.2"].ContextWindow)
+	require.Zero(t, metadata["deepseek-3.2"].MaxOutputTokens)
+	require.Zero(t, metadata["claude-sonnet-4-5"].ContextWindow)
+
+	account.ID = 41
+	account.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{
+		Source: "kiro",
+		Models: map[string]UpstreamModelMetadata{
+			"claude-sonnet-4-5": {ID: "claude-sonnet-4.5", ContextWindow: 200_000},
+		},
+	})
+	repo := &upstreamModelMetadataRepoStub{}
+	svc := &AccountTestService{accountRepo: repo}
+	catalog, err := svc.kiroCatalogFromListed(context.Background(), account, listed)
+	require.NoError(t, err)
+	require.Equal(t, names, catalog.Models)
+	require.Equal(t, account.ID, repo.accountID)
+	snapshot, ok := repo.updates[UpstreamModelMetadataExtraKey].(UpstreamModelMetadataSnapshot)
+	require.True(t, ok)
+	require.Equal(t, "kiro", snapshot.Source)
+	require.Equal(t, int64(1_000_000), snapshot.Models["claude-opus-4-6"].ContextWindow)
+	require.NotContains(t, snapshot.Models, "claude-sonnet-4-5")
+	stored, found := account.GetUpstreamModelMetadata("claude-opus-4-6-thinking")
+	require.True(t, found)
+	require.Equal(t, int64(1_000_000), stored.ContextWindow)
+	require.Equal(t, int64(1_000_000), kiroStoredMaxInputTokens(account, "claude-opus-4.6"))
+	require.Equal(t, int64(1_000_000), kiroStoredMaxInputTokens(account, "claude-opus-4-6-thinking"))
+	require.Equal(t, int64(200_000), kiroStoredMaxInputTokens(account, "claude-haiku-4-5-20251001"))
+	require.Zero(t, kiroStoredMaxInputTokens(account, "gpt-5.6-sol"))
+	require.Zero(t, kiroStoredMaxInputTokens(account, "claude-sonnet-4.5"))
+
+	repo.updates = nil
+	require.NoError(t, svc.persistKiroModelTokenLimits(context.Background(), account, map[string]UpstreamModelMetadata{
+		"claude-sonnet-4-5": {ID: "claude-sonnet-4.5"},
+	}))
+	require.Nil(t, repo.updates)
+	kept, found := account.GetUpstreamModelMetadata("claude-opus-4-6")
+	require.True(t, found)
+	require.Equal(t, int64(1_000_000), kept.ContextWindow)
+}
+
 func TestKiroListAvailableModelsStopsAfterTenPages(t *testing.T) {
 	account := &Account{Platform: PlatformKiro, Type: AccountTypeOAuth}
 	calls := 0
