@@ -94,6 +94,39 @@ func TestKiroListAvailableModelsRetriesForbiddenRegion(t *testing.T) {
 	require.Equal(t, []string{"q.us-east-1.amazonaws.com", "q.eu-central-1.amazonaws.com"}, hosts)
 }
 
+func TestKiroListAvailableModelsRetriesForbiddenRegionFromEU(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"api_region": "eu-central-1",
+		},
+	}
+	var hosts []string
+	do := func(req *http.Request) (*http.Response, error) {
+		hosts = append(hosts, req.URL.Host)
+		if req.URL.Host == "q.eu-central-1.amazonaws.com" {
+			return &http.Response{
+				StatusCode: http.StatusForbidden,
+				Body:       io.NopCloser(strings.NewReader(`{"message":"forbidden"}`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-sonnet-4.6"}]}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	}
+
+	ids, err := kiroListAvailableModelIDsWithDo(context.Background(), account, "token", do)
+	require.NoError(t, err)
+	require.Equal(t, []string{"claude-sonnet-4.6"}, ids)
+	require.Equal(t, []string{"q.eu-central-1.amazonaws.com", "q.us-east-1.amazonaws.com"}, hosts)
+}
+
 func TestKiroListAvailableModelsAPIKeyOmitsProfileArn(t *testing.T) {
 	account := &Account{
 		Platform: PlatformKiro,

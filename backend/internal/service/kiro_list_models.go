@@ -32,7 +32,7 @@ type kiroListAvailableModelsResponse struct {
 }
 
 // kiroListAvailableModelIDs 调用 GET https://q.{region}.amazonaws.com/ListAvailableModels。
-// 账号区域返回 403 时再试 eu-central-1。最多翻 10 页。
+// 账号区域返回 403 时，us-east-1 再试 eu-central-1，eu-central-1 再试 us-east-1。最多翻 10 页。
 func kiroListAvailableModelIDs(ctx context.Context, account *Account, token string) ([]string, error) {
 	return kiroListAvailableModelIDsWithDo(ctx, account, token, kiroModelsHTTPDo(account))
 }
@@ -64,12 +64,20 @@ func kiroListAvailableModelIDsWithDo(ctx context.Context, account *Account, toke
 
 	region := kiroAPIRegion(account)
 	ids, status, err := kiroListModelsPages(ctx, account, token, region, do)
-	if status == http.StatusForbidden && !strings.EqualFold(region, kiroListModelsFallbackRegion) {
-		fallbackIDs, _, fallbackErr := kiroListModelsPages(ctx, account, token, kiroListModelsFallbackRegion, do)
-		if fallbackErr == nil {
-			return fallbackIDs, nil
+	if status == http.StatusForbidden {
+		// us-east-1 → eu-central-1 matches upstream. Enterprise accounts whose
+		// api_region is already eu-central-1 still need the reverse hop.
+		fallbackRegion := kiroListModelsFallbackRegion
+		if strings.EqualFold(region, kiroListModelsFallbackRegion) {
+			fallbackRegion = kiroDefaultRegion
 		}
-		return nil, fallbackErr
+		if !strings.EqualFold(region, fallbackRegion) {
+			fallbackIDs, _, fallbackErr := kiroListModelsPages(ctx, account, token, fallbackRegion, do)
+			if fallbackErr == nil {
+				return fallbackIDs, nil
+			}
+			return nil, fallbackErr
+		}
 	}
 	return ids, err
 }
@@ -151,6 +159,11 @@ func (s *AccountTestService) fetchKiroDirectUpstreamModels(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
+	var repo AccountRepository
+	if s != nil {
+		repo = s.accountRepo
+	}
+	ensureKiroEnterpriseRealProfileArn(ctx, repo, account, token)
 	ids, err := kiroListAvailableModelIDs(ctx, account, token)
 	if err != nil {
 		return nil, newUpstreamModelSyncUpstreamError("Failed to fetch Kiro available models", err)
@@ -167,6 +180,11 @@ func (s *AccountTestService) syncKiroDirectModelCatalog(ctx context.Context, acc
 	if err != nil {
 		return nil, err
 	}
+	var repo AccountRepository
+	if s != nil {
+		repo = s.accountRepo
+	}
+	ensureKiroEnterpriseRealProfileArn(ctx, repo, account, token)
 	ids, err := kiroListAvailableModelIDs(ctx, account, token)
 	if err != nil {
 		return nil, newUpstreamModelSyncUpstreamError("Failed to fetch Kiro available models", err)
