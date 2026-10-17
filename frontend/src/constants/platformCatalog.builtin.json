@@ -42,12 +42,6 @@
       "litellm_provider": "xai"
     },
     {
-      "id": "adobe",
-      "display_name": "Adobe",
-      "gateway": "anthropic",
-      "cn_provider": false
-    },
-    {
       "id": "kimi",
       "display_name": "Kimi",
       "gateway": "openai",
@@ -290,6 +284,12 @@
           }
         ]
       }
+    },
+    {
+      "id": "leonardo",
+      "display_name": "Leonardo",
+      "gateway": "anthropic",
+      "cn_provider": false
     }
   ],
   "composite_precedence": [
@@ -299,7 +299,6 @@
     "antigravity",
     "kiro",
     "grok",
-    "adobe",
     "kimi",
     "zhipu",
     "deepseek",
@@ -307,6 +306,7 @@
     "opencode_go",
     "typesafe",
     "command_code",
-    "cline"
+    "cline",
+    "leonardo"
   ]
 }

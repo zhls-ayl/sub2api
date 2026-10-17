@@ -53,6 +53,7 @@ const messages: Record<string, string> = {
   'usage.original': 'Original',
   'usage.userBilled': 'User billed',
   'usage.accountBilled': 'Account billed',
+  'usage.upstreamCredits': 'Credits used',
   'usage.imageUnit': ' images',
   'usage.imageCount': 'Image count',
   'usage.imageBillingSize': 'Billing size',
@@ -662,6 +663,91 @@ describe('admin UsageTable tooltip', () => {
     expect(text).toContain('Per-image price')
     expect(text).toContain('not recorded')
     expect(text).not.toContain('(2K)')
+  })
+})
+
+describe('admin UsageTable upstream credits in cost tooltip', () => {
+  const mountWithTooltip = async (row: Record<string, unknown>, showAccountBilling = true) => {
+    const wrapper = mount(UsageTable, {
+      props: { data: [row], loading: false, columns: [], showAccountBilling },
+      global: {
+        stubs: {
+          DataTable: DataTableStub,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+    const triggers = wrapper.findAll('.group.relative')
+    await triggers[triggers.length - 1].trigger('mouseenter')
+    await nextTick()
+    return wrapper
+  }
+
+  it('shows credits used and the estimated cost for admins', async () => {
+    const wrapper = await mountWithTooltip({
+      ...baseImageRow,
+      request_id: 'req-credits',
+      upstream_credits: 8,
+      upstream_credit_cost: 0.0096,
+    })
+    const line = wrapper.find('[data-testid="usage-upstream-credits"]')
+    expect(line.exists()).toBe(true)
+    expect(line.text()).toContain('Credits used')
+    expect(line.text()).toContain('8')
+    expect(line.text()).toContain('usage.upstreamCreditCostApprox')
+  })
+
+  it('shows credits without an estimate when no unit price is set', async () => {
+    const wrapper = await mountWithTooltip({ ...baseImageRow, request_id: 'req-credits-no-price', upstream_credits: 8 })
+    const line = wrapper.find('[data-testid="usage-upstream-credits"]')
+    expect(line.exists()).toBe(true)
+    expect(line.text()).not.toContain('usage.upstreamCreditCostApprox')
+  })
+
+  it('hides credits outside the admin billing section', async () => {
+    const wrapper = await mountWithTooltip(
+      { ...baseImageRow, request_id: 'req-credits-user', upstream_credits: 8, upstream_credit_cost: 0.0096 },
+      false,
+    )
+    expect(wrapper.find('[data-testid="usage-upstream-credits"]').exists()).toBe(false)
+  })
+})
+
+describe('admin UsageTable image token column', () => {
+  const mountRows = (data: Record<string, unknown>[]) =>
+    mount(UsageTable, {
+      props: { data, loading: false, columns: [] },
+      global: {
+        stubs: {
+          DataTable: DataTableStub,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+  it('shows token usage under the image count when an image row carries tokens', () => {
+    const wrapper = mountRows([
+      { ...baseImageRow, request_id: 'req-image-tokens', input_tokens: 12, output_tokens: 1272 },
+    ])
+
+    const row = wrapper.find('[data-request-id="req-image-tokens"]')
+    expect(row.text()).toContain('2 images')
+    const tokens = row.find('[data-testid="image-usage-tokens"]')
+    expect(tokens.exists()).toBe(true)
+    expect(tokens.text()).toContain('12')
+    expect(tokens.text()).toContain((1272).toLocaleString())
+  })
+
+  it('keeps image rows without tokens unchanged', () => {
+    const wrapper = mountRows([{ ...baseImageRow, request_id: 'req-image-no-tokens' }])
+
+    const row = wrapper.find('[data-request-id="req-image-no-tokens"]')
+    expect(row.text()).toContain('2 images')
+    expect(row.find('[data-testid="image-usage-tokens"]').exists()).toBe(false)
   })
 })
 

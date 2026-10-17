@@ -502,6 +502,7 @@
         </span>
         <!-- Help icon -->
         <span
+          v-if="showGeminiQuotaPolicy"
           class="group relative cursor-help"
         >
           <svg
@@ -592,7 +593,7 @@
           </p>
         </div>
         <!-- AI Studio Client OAuth: show unlimited flow (no usage tracking) -->
-        <div v-else class="text-xs text-gray-400">
+        <div v-else-if="!showGeminiTodayStats" class="text-xs text-gray-400">
           {{ t('admin.accounts.gemini.rateLimit.unlimited') }}
         </div>
       </div>
@@ -685,38 +686,82 @@
       <div v-else class="text-xs text-gray-400">-</div>
     </template>
 
-    <!-- Adobe OAuth accounts: 展示 planCap + credits/balance 顶栏 -->
-    <template v-else-if="isAdobeUsageAccount">
+    <!-- Leonardo Cookie 号：Fast / Rollover 进度条（剩余 / 上限）+ Top-up 数字 + 重置日期 -->
+    <template v-else-if="isLeonardoUsageAccount">
       <div v-if="loading" class="space-y-1.5">
         <div class="h-4 w-24 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
-        <div class="h-1.5 w-32 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+        <div class="space-y-1">
+          <div class="h-1.5 w-32 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-1.5 w-28 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+        </div>
       </div>
       <div v-else-if="error" class="text-xs text-red-500">
         {{ error }}
       </div>
-      <div v-else-if="adobeUsageAvailable" class="space-y-2">
-        <div v-if="usageInfo?.adobe_plan_cap" class="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span
-            class="inline-flex items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-200"
-          >
-            <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.usageWindow.adobePlanCap') }}</span>
-            <span>{{ usageInfo.adobe_plan_cap }}</span>
+      <div v-else-if="leonardoUsageAvailable" class="space-y-2" data-testid="leonardo-usage">
+        <div v-if="leonardoPlanLabel" class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span class="inline-flex items-center rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+            {{ leonardoPlanLabel }}
           </span>
         </div>
-        <div v-if="usageInfo?.adobe_credit" class="space-y-1">
+
+        <div v-if="leonardoCredits" class="space-y-1" data-testid="leonardo-fast">
           <div class="flex items-baseline justify-between gap-2 text-[11px] text-gray-600 dark:text-gray-300">
-            <span class="font-medium tracking-[0.01em]">{{ t('admin.accounts.usageWindow.adobeCredits') }}</span>
-            <span class="font-semibold tabular-nums text-gray-700 dark:text-gray-200">{{ formatKiroAmount(usageInfo.adobe_credit.current_usage) }} / {{ formatKiroAmount(usageInfo.adobe_credit.usage_limit) }}</span>
+            <span class="font-medium tracking-[0.01em]">{{ leonardoCredits.fast_daily ? t('admin.accounts.usageWindow.leonardoFastDaily') : t('admin.accounts.usageWindow.leonardoFast') }}</span>
+            <span class="font-semibold tabular-nums text-gray-700 dark:text-gray-200">
+              {{ formatLeonardoTokens(leonardoCredits.subscription) }}<template v-if="leonardoFastLimit > 0"> / {{ formatLeonardoTokens(leonardoFastLimit) }}</template>
+            </span>
           </div>
-          <div class="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-            <div class="h-full rounded-full bg-adobe-500 transition-all" :style="{ width: `${adobeCreditPercent}%` }"></div>
+          <div v-if="leonardoFastLimit > 0" class="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+            <div :class="['h-full rounded-full transition-all', leonardoFastBarClass]" :style="{ width: `${leonardoFastPercent}%` }"></div>
           </div>
         </div>
-        <div v-if="adobeResetDisplay" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
-          <span class="inline-flex items-center gap-1">
-            <span class="text-gray-400 dark:text-gray-500">{{ t('admin.accounts.usageWindow.adobeReset') }}</span>
-            <span class="font-medium tabular-nums text-gray-600 dark:text-gray-300">{{ adobeResetDisplay }}</span>
+
+        <div v-if="leonardoShowRollover" class="space-y-1" data-testid="leonardo-rollover">
+          <div class="flex items-baseline justify-between gap-2 text-[11px] text-gray-600 dark:text-gray-300">
+            <span class="font-medium tracking-[0.01em]">{{ t('admin.accounts.usageWindow.leonardoRollover') }}</span>
+            <span class="font-semibold tabular-nums text-gray-700 dark:text-gray-200">
+              {{ formatLeonardoTokens(leonardoCredits?.rollover) }}<template v-if="leonardoRolloverLimit > 0"> / {{ formatLeonardoTokens(leonardoRolloverLimit) }}</template>
+            </span>
+          </div>
+          <div v-if="leonardoRolloverLimit > 0" class="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+            <div class="h-full rounded-full bg-sky-500 transition-all" :style="{ width: `${leonardoRolloverPercent}%` }"></div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
+          <span v-if="leonardoCredits" class="inline-flex items-center gap-1" data-testid="leonardo-topup">
+            <span class="text-gray-400 dark:text-gray-500">{{ t('admin.accounts.usageWindow.leonardoTopUp') }}</span>
+            <span class="font-medium tabular-nums text-gray-600 dark:text-gray-300">{{ formatLeonardoTokens(leonardoCredits.paid) }}</span>
           </span>
+          <span v-if="leonardoResetDisplay" class="inline-flex items-center gap-1">
+            <span class="text-gray-400 dark:text-gray-500">{{ t('admin.accounts.usageWindow.leonardoReset') }}</span>
+            <span class="font-medium tabular-nums text-gray-600 dark:text-gray-300">{{ leonardoResetDisplay }}</span>
+          </span>
+        </div>
+        <div class="flex items-center gap-1.5 mt-0.5">
+          <button
+            type="button"
+            class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
+            :disabled="activeQueryLoading"
+            @click="loadActiveUsage"
+          >
+            <svg
+              class="h-2.5 w-2.5"
+              :class="{ 'animate-spin': activeQueryLoading }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            {{ t('admin.accounts.usageWindow.activeQuery') }}
+          </button>
         </div>
       </div>
       <div v-else class="text-xs text-gray-400">-</div>
@@ -731,7 +776,7 @@
   <!-- Non-OAuth/Setup-Token accounts -->
   <div ref="rootRef" v-else>
     <!-- Gemini API Key accounts: show quota info -->
-    <AccountQuotaInfo v-if="account.platform === 'gemini'" :account="account" />
+    <AccountQuotaInfo v-if="account.platform === 'gemini' && !isGeminiThirdPartyApiKey" :account="account" />
     <!-- Key/Bedrock accounts: show today stats + optional quota bars -->
     <div v-else class="space-y-1">
       <OllamaCloudUsageCell
@@ -820,6 +865,7 @@ import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { isKiroDirectApiKeyAccount } from '@/utils/kiroAccount'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
+import { isOfficialGeminiBaseUrl } from '@/utils/geminiExplicitCache'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import ClaudeResetCreditsCell from './ClaudeResetCreditsCell.vue'
@@ -894,15 +940,26 @@ let desktopViewportMediaQuery: MediaQueryList | null = null
 let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = null
 let visibilityObserver: IntersectionObserver | null = null
 
+// Gemini 第三方上游 API Key：没有 AI Studio 等级与本地模拟配额
+const isGeminiThirdPartyApiKey = computed(() => {
+  if (props.account.platform !== 'gemini' || props.account.type !== 'apikey') return false
+  const creds = props.account.credentials as GeminiCredentials | undefined
+  return !isOfficialGeminiBaseUrl(creds?.base_url)
+})
+
+const isGeminiVertex = computed(() => {
+  return props.account.platform === 'gemini' && props.account.type === 'service_account'
+})
+
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
-  if (props.account.platform === 'gemini') return true
+  // 第三方上游 API Key 没有模拟配额，按普通 Key 账号展示今日统计与额度进度条。
+  if (props.account.platform === 'gemini') return !isGeminiThirdPartyApiKey.value
   // Kiro 直连 AWS(OAuth 或 无 base_url 的 API Key)展示 credits;外部中转账号按通用 API Key 处理。
   if (props.account.platform === 'kiro') {
     return props.account.type === 'oauth' || isKiroDirectApiKeyAccount(props.account)
   }
-  if (props.account.platform === 'adobe') return props.account.type === 'oauth'
   // 多协议 API Key 供应商：apikey 账号也有滚动用量窗口（coding plan / 订阅）或余额，
   // 由 CNProviderQuotaCell / CNProviderBalanceCell 自行探测与展示。
   if (isMultiProtocolApiKeyPlatform(props.account.platform)) {
@@ -920,7 +977,7 @@ const shouldFetchUsage = computed(() => {
     return props.account.type === 'oauth' || isKiroDirectApiKeyAccount(props.account)
   }
   if (props.account.platform === 'gemini') {
-    return true
+    return !isGeminiThirdPartyApiKey.value && !isGeminiVertex.value
   }
   if (props.account.platform === 'antigravity') {
     return props.account.type === 'oauth'
@@ -931,7 +988,9 @@ const shouldFetchUsage = computed(() => {
   if (props.account.platform === 'openai') {
     return props.account.type === 'oauth'
   }
-  if (props.account.platform === 'adobe') {
+  // Leonardo Cookie 号查积分余额；中转号没有 Leonardo 用量。必须与
+  // isLeonardoUsageAccount 同口径，否则积分模板永远拿不到数据。
+  if (props.account.platform === 'leonardo') {
     return props.account.type === 'oauth'
   }
   return false
@@ -944,8 +1003,9 @@ const cnBalanceCellVisible = computed(() => cnBalanceCellVisibleFn(props.account
 
 const isBatchManaged = computed(() => typeof props.requestBatchedUsage === 'function')
 
+// Vertex 没有本地模拟配额，用量窗口展示今日统计
 const showGeminiTodayStats = computed(() => {
-  return props.account.platform === 'gemini' && props.account.type === 'service_account'
+  return isGeminiVertex.value
 })
 
 const geminiUsageAvailable = computed(() => {
@@ -1124,6 +1184,10 @@ const geminiOAuthType = computed(() => {
   return (creds?.oauth_type || '').trim() || null
 })
 
+const showGeminiQuotaPolicy = computed(() => {
+  return !isGeminiVertex.value
+})
+
 // Gemini 是否为 Code Assist OAuth
 const isGeminiCodeAssist = computed(() => {
   if (props.account.platform !== 'gemini') return false
@@ -1131,9 +1195,10 @@ const isGeminiCodeAssist = computed(() => {
   return creds?.oauth_type === 'code_assist' || (!creds?.oauth_type && !!creds?.project_id)
 })
 
-const geminiChannelShort = computed((): 'ai studio' | 'gcp' | 'google one' | 'client' | null => {
+const geminiChannelShort = computed((): 'ai studio' | 'vertex' | 'gcp' | 'google one' | 'client' | null => {
   if (props.account.platform !== 'gemini') return null
 
+  if (isGeminiVertex.value) return 'vertex'
   // API Key accounts are AI Studio.
   if (props.account.type === 'apikey') return 'ai studio'
 
@@ -1147,6 +1212,7 @@ const geminiChannelShort = computed((): 'ai studio' | 'gcp' | 'google one' | 'cl
 
 const geminiUserLevel = computed((): string | null => {
   if (props.account.platform !== 'gemini') return null
+  if (isGeminiVertex.value) return null
 
   const tier = (geminiTier.value || '').toString().trim()
   const tierLower = tier.toLowerCase()
@@ -1204,7 +1270,7 @@ const geminiTierClass = computed(() => {
   const channel = geminiChannelShort.value
   const level = geminiUserLevel.value
 
-  if (channel === 'client' || channel === 'ai studio') {
+  if (channel === 'client' || channel === 'ai studio' || channel === 'vertex') {
     return 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300'
   }
 
@@ -1569,22 +1635,62 @@ const isKiroUsageAccount = computed(() => {
     (props.account.type === 'oauth' || isKiroDirectApiKeyAccount(props.account))
 })
 
-const isAdobeUsageAccount = computed(() =>
-  props.account.platform === 'adobe' && props.account.type === 'oauth'
+// Leonardo 原生账号：展示积分余额；中转账号无 Leonardo 用量，按通用处理。
+const isLeonardoUsageAccount = computed(() =>
+  props.account.platform === 'leonardo' && props.account.type === 'oauth'
 )
 
 const defaultUsageSource = computed<'passive' | 'active' | undefined>(() => {
-  if (isAnthropicOAuthOrSetupToken.value || isKiroUsageAccount.value || isAdobeUsageAccount.value) {
+  if (isAnthropicOAuthOrSetupToken.value || isKiroUsageAccount.value || isLeonardoUsageAccount.value) {
     return 'passive'
   }
   return undefined
 })
 
 const manualRefreshUsageSource = computed<'passive' | 'active' | undefined>(() => {
-  if (isKiroUsageAccount.value || isAdobeUsageAccount.value) {
+  if (isKiroUsageAccount.value || isLeonardoUsageAccount.value) {
     return 'active'
   }
   return defaultUsageSource.value
+})
+
+const leonardoUsageAvailable = computed(() =>
+  !!(usageInfo.value?.leonardo_credits || usageInfo.value?.leonardo_plan)
+)
+
+// Leonardo 积分池：上限来自后端的套餐常量表，未知套餐时为 0（只显示数字、不画进度条）。
+const leonardoCredits = computed(() => usageInfo.value?.leonardo_credits ?? null)
+const leonardoPlanLabel = computed(() =>
+  (usageInfo.value?.leonardo_plan_name || usageInfo.value?.leonardo_plan || '').trim()
+)
+const leonardoFastLimit = computed(() => leonardoCredits.value?.fast_limit ?? 0)
+const leonardoRolloverLimit = computed(() => leonardoCredits.value?.rollover_limit ?? 0)
+const leonardoPercent = (remaining?: number | null, limit?: number | null) =>
+  limit && limit > 0 ? clampPercent(((remaining ?? 0) / limit) * 100) : 0
+// 进度条按剩余比例画（与官网「剩余 / 上限」一致），越用越短。
+const leonardoFastPercent = computed(() =>
+  leonardoPercent(leonardoCredits.value?.subscription, leonardoFastLimit.value)
+)
+const leonardoFastBarClass = computed(() => {
+  if (leonardoFastPercent.value < 5) return 'bg-red-500'
+  if (leonardoFastPercent.value < 20) return 'bg-amber-500'
+  return 'bg-emerald-500'
+})
+const leonardoRolloverPercent = computed(() =>
+  leonardoPercent(leonardoCredits.value?.rollover, leonardoRolloverLimit.value)
+)
+// 免费套餐没有 Rollover Bank：容量与余额都为 0 时整行隐藏。
+const leonardoShowRollover = computed(() =>
+  !!leonardoCredits.value && (leonardoRolloverLimit.value > 0 || (leonardoCredits.value.rollover ?? 0) > 0)
+)
+const formatLeonardoTokens = (value?: number | null) =>
+  (value != null && Number.isFinite(value) ? value : 0).toLocaleString()
+const leonardoResetDisplay = computed(() => {
+  const raw = usageInfo.value?.leonardo_token_renewal
+  if (!raw) return ''
+  const parsed = new Date(raw)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toLocaleDateString()
 })
 
 const kiroUsageAvailable = computed(() => {
@@ -1616,19 +1722,6 @@ const clampPercent = (value?: number | null) => {
 
 const kiroCreditPercent = computed(() => clampPercent(usageInfo.value?.kiro_credit?.percentage_used))
 const kiroBonusPercent = computed(() => clampPercent(usageInfo.value?.kiro_bonus?.percentage_used))
-
-// Adobe（Step 6）：与 Kiro 分开语义——Adobe 是每日重置，Kiro 是订阅到期，不能复用。
-const adobeCreditPercent = computed(() => clampPercent(usageInfo.value?.adobe_credit?.percentage_used))
-const adobeUsageAvailable = computed(() =>
-  !!(usageInfo.value?.adobe_credit || usageInfo.value?.adobe_plan_cap)
-)
-const adobeResetDisplay = computed(() => {
-  const raw = usageInfo.value?.adobe_credit_reset_at
-  if (!raw) return ''
-  const parsed = new Date(raw)
-  if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toLocaleString()
-})
 
 const formatKiroAmount = (value?: number | null) => {
   if (value == null || !Number.isFinite(value)) return '0'

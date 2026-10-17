@@ -185,6 +185,53 @@ func TestCompositeTargetPlatformMiddlewareRewritesNestedLiveModel(t *testing.T) 
 	require.Equal(t, http.StatusNoContent, w.Code)
 }
 
+// Scenario: 回归 —— openai OAuth 与 deepseek API Key 同时映射 gpt-6-astra 时，
+// 请求必须在路由层被拒绝，不能落到默认 Anthropic handler 后再按模型名猜平台。
+// 仅 API Key 的跨平台歧义保持原行为（放行且不解析平台）。
+func TestCompositeTargetPlatformMiddlewareRejectsOnlyOAuthAmbiguousOwnership(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name         string
+		oauthClaimed bool
+		wantStatus   int
+	}{
+		{name: "oauth claimant", oauthClaimed: true, wantStatus: http.StatusBadRequest},
+		{name: "apikey only", oauthClaimed: false, wantStatus: http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := service.NewCompositeRouteResolver(nil)
+			resolver.SetModelOwnershipResolver(func(context.Context, int64, string) (service.CompositeModelOwnership, error) {
+				return service.CompositeModelOwnership{Ambiguous: true, OpenAIGatewayOAuthClaimed: tc.oauthClaimed}, nil
+			})
+			router := gin.New()
+			router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+				groupID := int64(8)
+				c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+					GroupID: &groupID,
+					Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
+				})
+				c.Next()
+			})))
+			router.Use(compositeTargetPlatformMiddleware(resolver))
+			router.POST("/v1/responses", func(c *gin.Context) {
+				_, resolved := service.ResolvedTargetPlatformFromContext(c.Request.Context())
+				require.False(t, resolved)
+				c.Status(http.StatusNoContent)
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-astra"}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, tc.wantStatus, w.Code)
+			if tc.oauthClaimed {
+				require.Contains(t, w.Body.String(), "explicit composite route")
+			}
+		})
+	}
+}
+
 func TestCompositeRequestModelFromMultipartLiveSession(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -314,7 +361,7 @@ func TestCompositeGeminiTargetPlatformMiddlewareUsesPathRoute(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w.Code)
 }
 
-func TestCompositeGeminiTargetPlatformMiddlewareDetectsAdobeNanoBanana(t *testing.T) {
+func TestCompositeGeminiTargetPlatformMiddlewareDetectsGptImageAsOpenAI(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
@@ -329,59 +376,7 @@ func TestCompositeGeminiTargetPlatformMiddlewareDetectsAdobeNanoBanana(t *testin
 	router.POST("/v1beta/models/*modelAction", func(c *gin.Context) {
 		platform, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context())
 		require.True(t, ok)
-		require.Equal(t, service.PlatformAdobe, platform)
-		c.Status(http.StatusNoContent)
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/nano-banana-pro:generateContent", strings.NewReader(`{"contents":[]}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusNoContent, w.Code)
-}
-
-func TestCompositeGeminiTargetPlatformMiddlewareDetectsAdobeGpt4oImage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
-		groupID := int64(1)
-		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
-			GroupID: &groupID,
-			Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
-		})
-		c.Next()
-	})))
-	router.Use(compositeGeminiTargetPlatformMiddleware(nil))
-	router.POST("/v1beta/models/*modelAction", func(c *gin.Context) {
-		platform, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context())
-		require.True(t, ok)
-		require.Equal(t, service.PlatformAdobe, platform)
-		c.Status(http.StatusNoContent)
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gpt-4o-image:generateContent", strings.NewReader(`{"contents":[]}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusNoContent, w.Code)
-}
-
-func TestCompositeGeminiTargetPlatformMiddlewareDefaultsGptImageToGemini(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
-		groupID := int64(1)
-		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
-			GroupID: &groupID,
-			Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
-		})
-		c.Next()
-	})))
-	router.Use(compositeGeminiTargetPlatformMiddleware(nil))
-	router.POST("/v1beta/models/*modelAction", func(c *gin.Context) {
-		platform, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context())
-		require.True(t, ok)
-		require.Equal(t, service.PlatformGemini, platform)
+		require.Equal(t, service.PlatformOpenAI, platform)
 		c.Status(http.StatusNoContent)
 	})
 

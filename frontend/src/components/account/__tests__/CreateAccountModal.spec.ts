@@ -166,7 +166,7 @@ const ModelWhitelistSelectorStub = defineComponent({
   template: `<button
     type="button"
     data-testid="model-whitelist-selector"
-    @click="$emit('update:modelValue', platform === 'adobe' ? ['imagen-4', 'flux-pro'] : ['public-glm']); $emit('upstream-synced')"
+    @click="$emit('update:modelValue', ['public-glm']); $emit('upstream-synced')"
   >models</button>`,
 })
 
@@ -261,7 +261,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   afterEach(() => vi.useRealTimers())
 
-  it('renders all 15 platforms in one grid with Kiro and Adobe last', () => {
+  it('renders all 15 platforms in one grid with Kiro and Leonardo last', () => {
     const wrapper = mountModal()
     const platformSelector = wrapper.get('[data-tour="account-form-platform"]')
 
@@ -280,7 +280,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       'Command Code',
       'Cline',
       'Kiro',
-      'Adobe',
+      'Leonardo',
     ])
   })
 
@@ -720,13 +720,13 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     })
   })
 
-  it('keeps Kiro and Adobe on the last row after the generic aggregators', () => {
+  it('keeps Kiro and Leonardo on the last row after the generic aggregators', () => {
     const wrapper = mountModal()
     const labels = wrapper
       .get('[data-tour="account-form-platform"]')
       .findAll('button')
       .map((button) => button.text().trim())
-    expect(labels.slice(-5)).toEqual(['OpenCode', 'Command Code', 'Cline', 'Kiro', 'Adobe'])
+    expect(labels.slice(-5)).toEqual(['OpenCode', 'Command Code', 'Cline', 'Kiro', 'Leonardo'])
     expect(labels.slice(5, 10)).toEqual(['TypeSafe / Jev', 'Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax'])
   })
 
@@ -1083,249 +1083,208 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 })
 
 
-describe('CreateAccountModal Adobe model mapping', () => {
+describe('CreateAccountModal gemini explicit cache upstream switch', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
-    createAccountMock.mockReset().mockResolvedValue({ id: 77, platform: 'adobe', type: 'oauth' })
+    createAccountMock.mockReset().mockResolvedValue({ id: 43, platform: 'gemini', type: 'apikey' })
     probeUpstreamBillingMock.mockReset().mockResolvedValue({})
     syncUpstreamModelsMock.mockReset().mockResolvedValue({ models: [], metadata: {} })
-    showWarningMock.mockReset()
   })
 
-  afterEach(() => {
-    vi.clearAllMocks()
-  })
-
-  async function openAdobeTab() {
+  it('only offers the switch for a custom base url and sends it on create', async () => {
     const wrapper = mountModal()
-    await wrapper.get('[data-testid="platform-tab-adobe"]').trigger('click')
-    await flushPromises()
-    return wrapper
-  }
+    await selectButtonByText(wrapper, 'Gemini')
+    await selectButtonByText(wrapper, 'admin.accounts.gemini.accountType.apiKeyTitle')
+    expect(wrapper.find('[data-testid="explicit-cache-upstream-section"]').exists()).toBe(false)
 
-  async function submitAdobe(wrapper: ReturnType<typeof mountModal>) {
-    await wrapper.get('[data-tour="account-form-name"]').setValue('adobe account')
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-    await wrapper.get('[data-testid="adobe-cookie-input"]').setValue('aux_sid=abc; ims=def')
-    await wrapper.get('[data-testid="adobe-create-account"]').trigger('click')
-    await flushPromises()
-  }
+    const baseUrlInput = wrapper
+      .findAll('form#create-account-form input[type="text"]')
+      .find((input) => (input.element as HTMLInputElement).value === 'https://generativelanguage.googleapis.com')
+    expect(baseUrlInput).toBeDefined()
+    await baseUrlInput!.setValue('https://upstream.example.com')
+    expect(wrapper.find('[data-testid="explicit-cache-upstream-section"]').exists()).toBe(true)
 
-  function submittedCredentials() {
-    return createAccountMock.mock.calls[0]?.[0]?.credentials as Record<string, any> | undefined
-  }
-
-  it('Adobe 页签不渲染 apikey 平台的字段', async () => {
-    const wrapper = await openAdobeTab()
-
-    // form.type 缺 adobe 分支时，accountCategory 的残留会把这些区块放出来。
-    expect(wrapper.find('[data-testid="upstream-billing-auto-probe"]').exists()).toBe(false)
-    expect(wrapper.html()).not.toContain('https://api.anthropic.com')
-  })
-
-  // 这才是复现路径：accountCategory 是跨页签共享的 reactive。
-  // 只测「直接打开 Adobe」会漏掉——那种情况下它还是默认的 oauth-based。
-  it('先在 Anthropic 页签切到 API Key 再切到 Adobe，仍不串味', async () => {
-    const wrapper = mountModal()
-    await selectButtonByText(wrapper, 'admin.accounts.claudeConsole')
-    await flushPromises()
-    expect(wrapper.find('[data-testid="upstream-billing-auto-probe"]').exists()).toBe(true)
-
-    await wrapper.get('[data-testid="platform-tab-adobe"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.find('[data-testid="upstream-billing-auto-probe"]').exists()).toBe(false)
-    expect(wrapper.html()).not.toContain('https://api.anthropic.com')
-
-    await wrapper.get('[data-testid="adobe-account-type-relay"]').trigger('click')
-    await flushPromises()
-    expect((wrapper.get('[data-testid="adobe-relay-base-url"]').element as HTMLInputElement).value).toBe('')
-    expect(wrapper.html()).not.toContain('https://api.anthropic.com')
-    expect(wrapper.html()).not.toContain('https://api.openai.com')
-  })
-
-  it('Adobe 用通用的模型限制区块，默认是空白名单', async () => {
-    const wrapper = await openAdobeTab()
-
-    expect(wrapper.find('[data-testid="oauth-model-restriction-section"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="model-whitelist-selector"]').exists()).toBe(true)
-    // Kiro 式的两列映射已经删掉了。
-    expect(wrapper.find('[data-testid="adobe-model-mapping-from"]').exists()).toBe(false)
-  })
-
-  it('第一步不填 Cookie，下一步之后才出现凭据', async () => {
-    const wrapper = await openAdobeTab()
-
-    expect(wrapper.find('[data-testid="adobe-cookie-input"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="adobe-access-token-input"]').exists()).toBe(false)
-
-    await wrapper.get('[data-tour="account-form-name"]').setValue('adobe account')
+    await wrapper.get('[data-testid="explicit-cache-upstream-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="explicit-cache-upstream-max-ttl"]').setValue('1800')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('gemini upstream gateway')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-upstream')
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="adobe-cookie-input"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="adobe-access-token-input"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="adobe-create-account"]').exists()).toBe(true)
-  })
-
-  it('白名单勾选项作为恒等对写进 credentials.model_mapping', async () => {
-    const wrapper = await openAdobeTab()
-    await wrapper.get('[data-testid="model-whitelist-selector"]').trigger('click')
-    await submitAdobe(wrapper)
-
-    const credentials = submittedCredentials()
-    expect(credentials?.cookie).toBe('aux_sid=abc; ims=def')
-    // 恒等对能被后端解析，靠的是 adobe 包里的 externalImageModelAliases。
-    expect(credentials?.model_mapping).toEqual({
-      'imagen-4': 'imagen-4',
-      'flux-pro': 'flux-pro'
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      base_url: 'https://upstream.example.com',
+      explicit_cache_upstream: true,
+      explicit_cache_upstream_max_ttl_seconds: 1800
     })
   })
 
-  it('白名单为空时完全不下发 model_mapping', async () => {
-    const wrapper = await openAdobeTab()
-    await submitAdobe(wrapper)
+  it('only offers the AI Studio tier for the official base url', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Gemini')
+    await selectButtonByText(wrapper, 'admin.accounts.gemini.accountType.apiKeyTitle')
+    expect(wrapper.find('[data-testid="gemini-oauth-tier"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="gemini-apikey-note"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="gemini-apikey-tier"]').setValue('aistudio_paid')
 
-    // 发空对象会把账号锁成「没有任何可用模型」；正确行为是不发，
-    // 交给后端回落到 DefaultAdobeModelMapping（含 4 个历史别名）。
-    expect(submittedCredentials()).not.toHaveProperty('model_mapping')
-  })
+    const baseUrlInput = wrapper
+      .findAll('form#create-account-form input[type="text"]')
+      .find((input) => (input.element as HTMLInputElement).value === 'https://generativelanguage.googleapis.com')
+    expect(baseUrlInput).toBeDefined()
+    await baseUrlInput!.setValue('https://upstream.example.com')
+    expect(wrapper.find('[data-testid="gemini-apikey-tier"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="gemini-apikey-note"]').exists()).toBe(false)
 
-  it('粘贴 sub2api-data JSON 时只把 cookie 写进凭据', async () => {
-    const wrapper = await openAdobeTab()
-    await wrapper.get('[data-tour="account-form-name"]').setValue('adobe account')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('gemini relay')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-upstream')
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
-    await wrapper.get('[data-testid="adobe-cookie-input"]').setValue(JSON.stringify({
-      type: 'sub2api-data',
-      version: 1,
-      exported_at: '2026-09-20T06:54:00.000Z',
-      proxies: [],
-      accounts: [
-        {
-          name: 'adobe-jane@example.com',
-          platform: 'adobe',
-          type: 'oauth',
-          credentials: { cookie: 'ims_sid=abc; aux_sid=def' },
-          concurrency: 10,
-          priority: 1
-        }
-      ]
-    }))
-    await wrapper.get('[data-testid="adobe-create-account"]').trigger('click')
-    await flushPromises()
 
-    expect(submittedCredentials()?.cookie).toBe('ims_sid=abc; aux_sid=def')
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = createAccountMock.mock.calls[0]?.[0]?.credentials
+    expect(credentials).toMatchObject({ base_url: 'https://upstream.example.com' })
+    expect(credentials).not.toHaveProperty('tier_id')
   })
 
-  it('粘贴带 arp_session_id 的 sub2api-data JSON 会写入凭据', async () => {
-    const wrapper = await openAdobeTab()
-    await wrapper.get('[data-tour="account-form-name"]').setValue('adobe account')
+  it('shows the OAuth tier fallback only on the OAuth form', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Gemini')
+    await selectButtonByText(wrapper, 'admin.accounts.gemini.accountType.oauthTitle')
+    expect(wrapper.find('[data-testid="gemini-oauth-tier"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="gemini-apikey-note"]').exists()).toBe(false)
+  })
+
+  it('keeps the selected AI Studio tier for the official base url', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Gemini')
+    await selectButtonByText(wrapper, 'admin.accounts.gemini.accountType.apiKeyTitle')
+    await wrapper.get('[data-testid="gemini-apikey-tier"]').setValue('aistudio_paid')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('gemini official')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('AIza-official')
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
-    await wrapper.get('[data-testid="adobe-cookie-input"]').setValue(JSON.stringify({
-      type: 'sub2api-data',
-      accounts: [
-        {
-          credentials: {
-            cookie: 'ims_sid=abc; aux_sid=def',
-            arp_session_id: 'arp-from-json'
-          }
-        }
-      ]
-    }))
-    await wrapper.get('[data-testid="adobe-create-account"]').trigger('click')
-    await flushPromises()
 
-    expect(submittedCredentials()?.cookie).toBe('ims_sid=abc; aux_sid=def')
-    expect(submittedCredentials()?.arp_session_id).toBe('arp-from-json')
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      base_url: 'https://generativelanguage.googleapis.com',
+      tier_id: 'aistudio_paid'
+    })
+  })
+})
+
+describe('CreateAccountModal Vertex API key auth', () => {
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    createAccountMock.mockReset().mockResolvedValue({ id: 44, platform: 'gemini', type: 'service_account' })
+    probeUpstreamBillingMock.mockReset().mockResolvedValue({})
+    syncUpstreamModelsMock.mockReset().mockResolvedValue({ models: [], metadata: {} })
   })
 
-  it('粘贴带 access_token 的 sub2api-data JSON 会写入凭据，空则不下发该键', async () => {
-    const wrapper = await openAdobeTab()
-    await wrapper.get('[data-tour="account-form-name"]').setValue('adobe account')
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-    await wrapper.get('[data-testid="adobe-cookie-input"]').setValue(JSON.stringify({
-      type: 'sub2api-data',
-      accounts: [
-        {
-          credentials: {
-            cookie: 'ims_sid=abc; aux_sid=def',
-            access_token: 'ims-from-json'
-          }
-        }
-      ]
-    }))
-    await wrapper.get('[data-testid="adobe-create-account"]').trigger('click')
-    await flushPromises()
+  async function openGeminiVertexApiKeyForm() {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Gemini')
+    await selectButtonByText(wrapper, 'admin.accounts.vertexLabel')
+    await wrapper.get('[data-testid="vertex-auth-mode-apikey"]').setValue(true)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('vertex api key account')
+    await wrapper.get('[data-testid="vertex-api-key-input"]').setValue(' vertex-key ')
+    return wrapper
+  }
 
-    expect(submittedCredentials()?.cookie).toBe('ims_sid=abc; aux_sid=def')
-    expect(submittedCredentials()?.access_token).toBe('ims-from-json')
-
-    createAccountMock.mockClear()
-    const wrapperEmpty = await openAdobeTab()
-    await wrapperEmpty.get('[data-tour="account-form-name"]').setValue('adobe account')
-    await wrapperEmpty.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-    await wrapperEmpty.get('[data-testid="adobe-cookie-input"]').setValue('aux_sid=abc; ims=def')
-    await wrapperEmpty.get('[data-testid="adobe-create-account"]').trigger('click')
-    await flushPromises()
-    expect(submittedCredentials()).not.toHaveProperty('access_token')
-  })
-
-  it('ARP 框手填会写入凭据，空则不下发该键', async () => {
-    const wrapper = await openAdobeTab()
-    await wrapper.get('[data-tour="account-form-name"]').setValue('adobe account')
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-    expect(wrapper.find('[data-testid="adobe-arp-input"]').exists()).toBe(true)
-    await wrapper.get('[data-testid="adobe-cookie-input"]').setValue('aux_sid=abc; ims=def')
-    await wrapper.get('[data-testid="adobe-arp-input"]').setValue('  typed-arp  ')
-    await wrapper.get('[data-testid="adobe-create-account"]').trigger('click')
-    await flushPromises()
-    expect(submittedCredentials()?.arp_session_id).toBe('typed-arp')
-
-    createAccountMock.mockClear()
-    const wrapperEmpty = await openAdobeTab()
-    await wrapperEmpty.get('[data-tour="account-form-name"]').setValue('adobe account')
-    await wrapperEmpty.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-    await wrapperEmpty.get('[data-testid="adobe-cookie-input"]').setValue('aux_sid=abc; ims=def')
-    await wrapperEmpty.get('[data-testid="adobe-create-account"]').trigger('click')
-    await flushPromises()
-    expect(submittedCredentials()).not.toHaveProperty('arp_session_id')
-  })
-
-  it('Adobe 中转号在第一步提交 type=apikey + base_url，不改默认 priority', async () => {
-    const wrapper = await openAdobeTab()
-    await wrapper.get('[data-testid="adobe-account-type-relay"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.find('[data-testid="adobe-relay-fields"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="adobe-cookie-input"]').exists()).toBe(false)
-    const relayBaseUrl = wrapper.get('[data-testid="adobe-relay-base-url"]')
-    expect((relayBaseUrl.element as HTMLInputElement).value).toBe('')
-    expect(relayBaseUrl.attributes('placeholder')).toBe('https://your-relay.example.com')
-    expect(wrapper.html()).not.toContain('https://api.anthropic.com')
-    expect(wrapper.html()).not.toContain('https://api.openai.com')
-
-    await wrapper.get('[data-tour="account-form-name"]').setValue('adobe relay')
-    await wrapper.get('[data-testid="adobe-relay-base-url"]').setValue('https://relay.example/v1')
-    await wrapper.get('[data-testid="adobe-relay-api-key"]').setValue('sk-relay')
+  it('creates a Gemini Vertex account with API key auth and no project for the express endpoint', async () => {
+    const wrapper = await openGeminiVertexApiKeyForm()
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
 
     expect(createAccountMock).toHaveBeenCalledTimes(1)
     const payload = createAccountMock.mock.calls[0]?.[0]
-    expect(payload?.platform).toBe('adobe')
-    expect(payload?.type).toBe('apikey')
-    expect(payload?.priority).toBe(1)
+    expect(payload?.platform).toBe('gemini')
+    expect(payload?.type).toBe('service_account')
     expect(payload?.credentials).toEqual({
-      api_key: 'sk-relay',
-      base_url: 'https://relay.example/v1'
+      auth_mode: 'apikey',
+      api_key: 'vertex-key',
+      location: 'global',
+      tier_id: 'vertex'
     })
-    expect(wrapper.find('[data-testid="adobe-cookie-input"]').exists()).toBe(false)
+  })
+
+  it('sends the project id when an API key account targets a project endpoint', async () => {
+    const wrapper = await openGeminiVertexApiKeyForm()
+    await wrapper.get('[data-testid="vertex-api-key-project-id-input"]').setValue(' my-project ')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      auth_mode: 'apikey',
+      api_key: 'vertex-key',
+      project_id: 'my-project',
+      location: 'global'
+    })
+  })
+
+  it('keeps Anthropic Vertex accounts on Service Account JSON only', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'admin.accounts.vertexLabel')
+    expect(wrapper.find('[data-testid="vertex-auth-mode-apikey"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="vertex-api-key-input"]').exists()).toBe(false)
+  })
+})
+
+describe('CreateAccountModal Leonardo accounts', () => {
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    createAccountMock.mockReset().mockResolvedValue({ id: 7, platform: 'leonardo', type: 'oauth' })
+  })
+
+  it('moves the cookie account to the credential step instead of asking for an API key', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="platform-tab-leonardo"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Leonardo cookie')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="leonardo-cookie-input"]').setValue('__Secure-better-auth.session_token=abc')
+    await wrapper.get('[data-testid="leonardo-create-account"]').trigger('click')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.platform).toBe('leonardo')
+    expect(payload?.type).toBe('oauth')
+    expect(payload?.credentials).toMatchObject({ cookie: '__Secure-better-auth.session_token=abc' })
+  })
+
+  it('sends the Leonardo cookie credit unit price in extra', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="platform-tab-leonardo"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Leonardo cookie')
+    await wrapper.get('[data-testid="leonardo-credit-unit-price-usd"]').setValue('0.0012')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="leonardo-cookie-input"]').setValue('__Secure-better-auth.session_token=abc')
+    await wrapper.get('[data-testid="leonardo-create-account"]').trigger('click')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.type).toBe('oauth')
+    expect(payload?.extra?.leonardo_credit_unit_price_usd).toBe(0.0012)
+  })
+
+  it('creates the relay account in one step with base_url and api_key', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="platform-tab-leonardo"]').trigger('click')
+    await wrapper.get('[data-testid="leonardo-account-type-relay"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Leonardo relay')
+    await wrapper.get('[data-testid="leonardo-relay-base-url"]').setValue('https://relay.example.com')
+    await wrapper.get('[data-testid="leonardo-relay-api-key"]').setValue('sk-relay')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.platform).toBe('leonardo')
+    expect(payload?.type).toBe('apikey')
+    expect(payload?.credentials).toMatchObject({ base_url: 'https://relay.example.com', api_key: 'sk-relay' })
+    expect(wrapper.find('[data-testid="leonardo-credit-unit-price-usd"]').exists()).toBe(false)
+    expect(payload?.extra?.leonardo_credit_unit_price_usd).toBeUndefined()
   })
 })

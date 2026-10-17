@@ -340,3 +340,44 @@ func TestUsageLogFromService_PreservesHistoricalMissingImageSize(t *testing.T) {
 func f64Ptr(value float64) *float64 {
 	return &value
 }
+
+// 上游积分与按账号单价估算的成本只在管理端 DTO 出现，普通用户 DTO 不暴露上游成本。
+func TestUsageLogFromServiceAdmin_UpstreamCredits(t *testing.T) {
+	t.Parallel()
+
+	credits := 8.0
+	log := &service.UsageLog{
+		RequestID:   "leonardo-image:1",
+		Model:       "gpt-image-2",
+		KiroCredits: &credits,
+		Account: &service.Account{
+			ID:       1,
+			Platform: service.PlatformLeonardo,
+			Type:     service.AccountTypeOAuth,
+			Extra:    map[string]any{"leonardo_credit_unit_price_usd": 0.0012},
+		},
+	}
+
+	admin := UsageLogFromServiceAdmin(log)
+	require.NotNil(t, admin.UpstreamCredits)
+	require.InDelta(t, 8, *admin.UpstreamCredits, 1e-9)
+	require.NotNil(t, admin.UpstreamCreditCost)
+	require.InDelta(t, 0.0096, *admin.UpstreamCreditCost, 1e-9)
+
+	userJSON, err := json.Marshal(UsageLogFromService(log))
+	require.NoError(t, err)
+	require.NotContains(t, string(userJSON), "upstream_credits")
+	require.NotContains(t, string(userJSON), "upstream_credit_cost")
+
+	// 未设单价：只回积分，不给成本估算。
+	log.Account.Extra = map[string]any{}
+	admin = UsageLogFromServiceAdmin(log)
+	require.NotNil(t, admin.UpstreamCredits)
+	require.Nil(t, admin.UpstreamCreditCost)
+
+	// 没有积分：两个字段都不出现。
+	log.KiroCredits = nil
+	adminJSON, err := json.Marshal(UsageLogFromServiceAdmin(log))
+	require.NoError(t, err)
+	require.NotContains(t, string(adminJSON), "upstream_credits")
+}

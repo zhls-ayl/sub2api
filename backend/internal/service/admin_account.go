@@ -458,6 +458,11 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 				return nil, err
 			}
 		}
+		if isLeonardoCookieAccount(account) {
+			if err := ValidateLeonardoCreditUnitPriceFromExtra(account.Extra); err != nil {
+				return nil, err
+			}
+		}
 		NormalizeFixedQuotaWindows(account.Extra)
 	}
 	if input.ExpiresAt != nil && *input.ExpiresAt > 0 {
@@ -485,6 +490,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if !isServableAccountPlatform(input.Platform) {
+		return nil, infraerrors.BadRequest("ACCOUNT_PLATFORM_UNSUPPORTED", fmt.Sprintf("unsupported account platform: %s", input.Platform))
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
@@ -734,6 +742,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		ComputeQuotaResetAt(account.Extra)
 		if isKiroDirectModeAccount(account) {
 			if err := ValidateKiroCreditUnitPriceFromExtra(account.Extra); err != nil {
+				return nil, err
+			}
+		}
+		if isLeonardoCookieAccount(account) {
+			if err := ValidateLeonardoCreditUnitPriceFromExtra(account.Extra); err != nil {
 				return nil, err
 			}
 		}

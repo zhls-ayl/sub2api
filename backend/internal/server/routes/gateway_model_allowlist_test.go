@@ -24,7 +24,7 @@ func newGatewayRoutesTestRouterWithGroup(group *service.Group) *gin.Engine {
 		&handler.Handlers{
 			Gateway:       &handler.GatewayHandler{},
 			OpenAIGateway: &handler.OpenAIGatewayHandler{},
-			AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
+			AsyncImage:    handler.NewAsyncImageHandler(nil, nil, nil),
 		},
 		servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
 			groupID := int64(1)

@@ -38,6 +38,7 @@ func TestCalculateOpenAIRecordUsageCost_SearchIsAdditiveToTokens(t *testing.T) {
 		UsageTokens{InputTokens: 1000, OutputTokens: 500},
 		"",
 		boolPtr(false),
+		false,
 		time.Time{},
 		"",
 	)
@@ -70,6 +71,7 @@ func TestCalculateOpenAIRecordUsageCost_SearchOnlyWhenNoTokenPricing(t *testing.
 		UsageTokens{},
 		"",
 		boolPtr(false),
+		false,
 		time.Time{},
 		"",
 	)
@@ -117,6 +119,7 @@ func TestCalculateOpenAIRecordUsageCost_TokenPricingErrorNotSwallowedBySearch(t 
 		UsageTokens{InputTokens: 1000, OutputTokens: 500},
 		"",
 		boolPtr(false),
+		false,
 		time.Time{},
 		"",
 	)

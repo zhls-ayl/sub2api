@@ -564,6 +564,16 @@ export interface ReasoningEffortMapping {
   model?: string
 }
 
+/** 分组名称与描述在某个语言下的译文；字段为空表示沿用分组自身的 name/description。 */
+export interface GroupLocaleText {
+  name?: string
+  description?: string
+}
+
+/** 以语言代码（en、zh…）为键的分组文案译文。 */
+export type GroupI18n = Record<string, GroupLocaleText>
+
+// 用户侧接口返回的 name / description 已由后端按请求语言（Accept-Language）选好
 export interface Group {
   id: number
   name: string
@@ -635,6 +645,8 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  // 管理端的 name / description 始终是原字段，各语言译文另放在 i18n 里
+  i18n?: GroupI18n
   force_openai_fast: boolean
   free_openai_fast: boolean
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
@@ -801,6 +813,7 @@ export interface UpdateApiKeyRequest {
 export interface CreateGroupRequest {
   name: string
   description?: string | null
+  i18n?: GroupI18n
   platform?: GroupPlatform
   rate_multiplier?: number
   is_exclusive?: boolean
@@ -874,6 +887,7 @@ export interface CreateGroupRequest {
 export interface UpdateGroupRequest {
   name?: string
   description?: string | null
+  i18n?: GroupI18n
   platform?: GroupPlatform
   rate_multiplier?: number
   is_exclusive?: boolean
@@ -1034,6 +1048,7 @@ export interface ProxyQualityCheckResult {
 export interface GeminiCredentials {
   // API Key authentication
   api_key?: string
+  base_url?: string
 
   // OAuth authentication
   access_token?: string
@@ -1058,11 +1073,15 @@ export interface GeminiCredentials {
   model_mapping?: Record<string, string>
 }
 
+export type TempUnschedulableScope = 'account' | 'model'
+
 export interface TempUnschedulableRule {
   error_code: number
   keywords: string[]
   duration_minutes: number
   description: string
+  // 作用范围：account 暂停整个账号，model 只冷却本次请求的模型；缺省时 401 按 account、其余按 model 处理。
+  scope?: TempUnschedulableScope
 }
 
 export interface TempUnschedulableState {
@@ -1070,6 +1089,8 @@ export interface TempUnschedulableState {
   triggered_at_unix: number
   status_code: number
   matched_keyword: string
+  scope?: TempUnschedulableScope
+  model?: string
   rule_index: number
   error_message: string
   trigger_count?: number
@@ -1256,6 +1277,7 @@ export interface Account {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
 kiro_credit_unit_price_usd?: number
+    leonardo_credit_unit_price_usd?: number
     upstream_billing_probe_enabled?: boolean
     upstream_billing_rate_sync_enabled?: boolean
     upstream_billing_probe?: UpstreamBillingProbeSnapshot
@@ -1428,25 +1450,24 @@ export interface AntigravityModelQuota {
   reset_time: string  // 重置时间 ISO8601
 }
 
-export interface AdobeCreditProgress {
-  current_usage: number
-  usage_limit: number
-  percentage_used: number
-}
-
-export interface AdobeCreditPool {
-  name: string
-  total?: number | null
-  used?: number | null
-  available?: number | null
-}
-
 export interface KiroCreditProgress {
   current_usage: number
   usage_limit: number
   percentage_used: number
   days_remaining?: number
   expiry_date?: string | null
+}
+
+// Leonardo 积分余额快照：上游只给各池剩余量，上限来自套餐常量表（未知套餐时为 0）
+export interface LeonardoCreditsSnapshot {
+  total: number
+  usable?: number
+  subscription: number
+  paid: number
+  rollover: number
+  fast_limit?: number
+  rollover_limit?: number
+  fast_daily?: boolean
 }
 
 export interface GrokQuotaWindow {
@@ -1540,11 +1561,11 @@ export interface AccountUsageInfo {
   kiro_runtime_reason?: string | null
   kiro_runtime_reset_at?: string | null
 
-  // Adobe credits/balance 快照（Step 6）：planCap 是不透明字符串（目前只见过 FREE）
-  adobe_plan_cap?: string | null
-  adobe_credit?: AdobeCreditProgress | null
-  adobe_credit_pools?: AdobeCreditPool[] | null
-  adobe_credit_reset_at?: string | null
+  // Leonardo 积分余额快照
+  leonardo_plan?: string | null
+  leonardo_plan_name?: string | null
+  leonardo_credits?: LeonardoCreditsSnapshot | null
+  leonardo_token_renewal?: string | null
 
   // Antigravity 403 forbidden 状态
   is_forbidden?: boolean
@@ -1909,6 +1930,10 @@ export interface AdminUsageLog extends UsageLog {
   account_rate_multiplier?: number | null
   // 自定义定价规则计算的账号统计费用（nil 时使用 total_cost * multiplier）
   account_stats_cost?: number | null
+  // 本次消耗的上游积分（Kiro credits / Leonardo 积分，仅管理员可见）
+  upstream_credits?: number | null
+  // 按账号当前积分单价估算的上游成本（USD，未设单价时为空）
+  upstream_credit_cost?: number | null
 
   // 渠道 ID 和计费等级（仅管理员可见）
   channel_id?: number | null

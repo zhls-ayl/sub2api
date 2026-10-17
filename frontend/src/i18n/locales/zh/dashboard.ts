@@ -356,6 +356,8 @@ export default {
     accountCost: '成本',
     userBilled: '用户扣费',
     accountBilled: '账号计费',
+    upstreamCredits: '积分消耗',
+    upstreamCreditCostApprox: '约{amount}',
     resetNow: '现在',
     resetPending: '待刷新',
     accountMultiplier: '账号倍率',

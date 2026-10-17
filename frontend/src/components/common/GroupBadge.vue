@@ -8,7 +8,7 @@
     <!-- Platform logo -->
     <PlatformIcon v-if="platform" :platform="platform" size="sm" />
     <!-- Group name -->
-    <span class="truncate">{{ name }}</span>
+    <span :class="truncate ? 'truncate' : 'min-w-0 whitespace-normal [overflow-wrap:anywhere]'">{{ name }}</span>
     <!-- Right side label -->
     <span v-if="showLabel" :class="labelClass">
       <template v-if="hasCustomRate">
@@ -45,6 +45,8 @@ interface Props {
   peakEnd?: string
   peakRateMultiplier?: number
   showRate?: boolean
+  /** Allow full group names to wrap in layouts that have room for multiple lines. */
+  truncate?: boolean
   daysRemaining?: number | null // 剩余天数（订阅类型时使用）
   /**
    * 订阅分组默认在右侧 label 展示"订阅"或剩余天数；
@@ -57,6 +59,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   subscriptionType: 'standard',
   showRate: true,
+  truncate: true,
   daysRemaining: null,
   userRateMultiplier: null,
   peakRateEnabled: false,
@@ -165,9 +168,6 @@ const labelClass = computed(() => {
   if (props.platform === 'grok') {
     return `${base} bg-zinc-300/70 text-zinc-800 dark:bg-zinc-700/60 dark:text-zinc-200`
   }
-  if (props.platform === 'adobe') {
-    return `${base} bg-adobe-200/60 text-adobe-800 dark:bg-adobe-800/40 dark:text-adobe-300`
-  }
   if (props.platform === 'kimi') {
     return `${base} bg-pink-200/60 text-pink-800 dark:bg-pink-800/40 dark:text-pink-300`
   }
@@ -222,11 +222,6 @@ const badgeClass = computed(() => {
     return isSubscription.value
       ? 'bg-zinc-200 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-100'
       : 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200'
-  }
-  if (props.platform === 'adobe') {
-    return isSubscription.value
-      ? 'bg-adobe-100 text-adobe-700 dark:bg-adobe-900/30 dark:text-adobe-400'
-      : 'bg-adobe-50 text-adobe-700 dark:bg-adobe-900/20 dark:text-adobe-400'
   }
   if (props.platform === 'kimi') {
     return isSubscription.value

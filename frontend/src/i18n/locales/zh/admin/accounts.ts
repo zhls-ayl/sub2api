@@ -78,8 +78,6 @@ export default {
       editAccount: '编辑账号',
       deleteAccount: '删除账号',
       searchAccounts: '搜索账号...',
-      moreFilters: '更多筛选',
-      moreFiltersActive: '更多筛选（已启用 {count} 项）',
       notes: '备注',
       notesPlaceholder: '请输入备注',
       notesHint: '备注可选',
@@ -112,6 +110,8 @@ export default {
       kiroCooldown: 'Kiro 冷却中',
       kiroCreditUnitPriceUsd: '每积分单价',
       kiroCreditUnitPriceUsdHint: '仅用于 Kiro 今日统计的 Credits 金额估算，0 表示不显示估算金额',
+      leonardoCreditUnitPriceUsd: '每积分单价（USD）',
+      leonardoCreditUnitPriceUsdHint: '仅用于今日统计中估算 Leonardo 积分消耗的金额，0 表示不显示估算。参考价（月费 ÷ 每月快速积分）：Essential $12 / 8,500 ≈ $0.0014，Premium $30 / 25,000 = $0.0012，Ultimate $60 / 60,000 = $0.001；按年付费更便宜。',
       kiroProfileError: 'Profile 配置异常',
       kiroProfileHint: '请重新解析或保存可用的 profileArn',
       kiroRuntimeResetsAt: '预计 {time} 自动恢复',
@@ -324,6 +324,7 @@ export default {
       deleteConfirm: "确定要删除账号 '{name}' 吗？此操作无法撤销。",
       failedToClearRateLimit: '清除速率限制失败',
       platforms: {
+        leonardo: 'Leonardo',
         claude: 'Claude',
         openai: 'OpenAI',
         anthropic: 'Anthropic',
@@ -331,7 +332,6 @@ export default {
         antigravity: 'Antigravity',
         grok: 'Grok',
         kiro: 'Kiro',
-        adobe: 'Adobe',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
@@ -442,9 +442,9 @@ export default {
         grokOauth: 'Grok OAuth',
         kiroApikey: '通过 API Key 直连 AWS',
         kiroApikeyRelay: '通过外部 API Key + Base URL 中转',
+        leonardoOauth: 'Leonardo 网页版 Cookie 直连',
+        leonardoApikeyRelay: 'OpenAI 兼容 API 中转兜底',
         kiroOauth: '社交 OAuth / AWS Builder ID / 导入',
-        adobeOauth: 'Firefly Cookie',
-        adobeApikeyRelay: '通过外部 API Key + Base URL 中转',
         antigravityApikey: '通过 Base URL + API Key 连接',
         upstream: '对接上游',
         upstreamDesc: '通过 Base URL + API Key 连接上游'
@@ -485,7 +485,7 @@ export default {
       tempUnschedulable: {
         title: '临时不可调度',
         statusTitle: '临时不可调度状态',
-        hint: '当错误码与关键词同时匹配时，账号会在指定时间内被临时禁用。',
+        hint: '当错误码与关键词同时匹配时，按规则的作用范围在指定时间内暂停整个账号，或只冷却对应模型。',
         notice: '规则按顺序匹配，需同时满足错误码与关键词。',
         addRule: '添加规则',
         ruleOrder: '规则序号',
@@ -501,6 +501,12 @@ export default {
         keywords: '关键词',
         keywordsPlaceholder: '例如 overloaded, too many requests',
         keywordsHint: '多个关键词用逗号分隔，匹配时必须命中其中之一。',
+        scope: '作用范围',
+        scopeModel: '模型级',
+        scopeModelDesc: '只冷却本次请求的模型',
+        scopeAccount: '账户级',
+        scopeAccountDesc: '暂停整个账号的调度',
+        scopeHint: '无法识别请求模型时，模型级规则按账户级处理。',
         description: '描述',
         descriptionPlaceholder: '可选，便于记忆规则用途',
         rulesInvalid: '请至少填写一条包含错误码、关键词和时长的规则。',
@@ -529,6 +535,15 @@ export default {
           unavailableDesc: '服务不可用 - 暂停 30 分钟'
         }
       },
+      leonardo: {
+        cookieLabel: 'Leonardo Cookie',
+        cookieHint: '登录 app.leonardo.ai 后，从浏览器 DevTools（Application → Cookies 或 Network 请求头的 Cookie）复制完整 cookie 串；必须包含 __Secure-better-auth.session_token，分片 session_data.* 建议一并复制。也支持只粘贴裸 session token 值。短期 JWT 由后台自动用该 cookie 换取并保活。',
+        cookiePlaceholder: '__Secure-better-auth.session_token=...; __Secure-better-auth.session_data.0=...',
+        cookieRequired: '请填写 Leonardo Cookie',
+        relayApiKeyHint: '该外部上游的 API Key（通过 Authorization: Bearer 发送）',
+        relayBaseUrlHint: 'OpenAI 兼容上游地址（官方 https://api.openai.com 或三方中转）；原生账号全部故障时兜底'
+      },
+
       usageWindow: {
         statsTitle: '5小时窗口用量统计',
         statsTitleDaily: '每日用量统计',
@@ -561,13 +576,16 @@ export default {
         passiveSampled: '被动采样',
         activeQuery: '查询',
         kiroBonus: 'Bonus',
+        leonardoCredits: '积分',
+        leonardoFast: 'Fast 积分',
+        leonardoFastDaily: 'Fast 积分（每日）',
+        leonardoRollover: '结转积分',
+        leonardoTopUp: '充值积分',
+        leonardoReset: '重置',
         kiroCredits: 'Credits',
         kiroDaysLeft: '剩余 {days} 天',
         kiroExpires: '到期',
         kiroReset: '重置',
-        adobeCredits: 'Credits',
-        adobeReset: '重置',
-        adobePlanCap: '套餐',
         estimatedTotalCost: '预计总费用 ${cost}',
         estimatedTotalCostTooltip: '根据当前窗口费用和使用率估算达到 100% 使用率时的总费用'
       },
@@ -737,10 +755,18 @@ export default {
       claudeConsole: 'Claude Console',
       bedrockLabel: 'AWS Bedrock',
       bedrockDesc: 'SigV4 / API Key',
-      vertexLabel: 'Vertex',
+      vertexLabel: 'Agent Platform (Vertex)',
       vertexDesc: 'Service Account',
-      vertexAnthropicHint: '使用 Google Cloud Service Account JSON 通过 Vertex AI 调用 Anthropic Claude。建议配置模型映射，将客户端 Claude 模型名映射到 Vertex 模型 ID。',
-      vertexGeminiHint: '使用 Google Cloud Service Account JSON 访问 Vertex AI Gemini。建议将 Vertex 账号放入独立分组，避免和 AI Studio/Gemini OAuth 同模型混调。',
+      vertexGeminiDesc: 'Service Account / API Key',
+      vertexAnthropicHint: '使用 Google Cloud Service Account JSON 通过 Agent Platform (Vertex) 调用 Anthropic Claude。建议配置模型映射，将客户端 Claude 模型名映射到 Agent Platform (Vertex) 模型 ID。',
+      vertexGeminiHint: '通过 Agent Platform (Vertex) 调用 Gemini，支持 Service Account JSON 或 API Key 认证。建议将此类账号放入独立分组，避免和 AI Studio/Gemini OAuth 同模型混调。',
+      vertexAuthMode: '认证方式',
+      vertexAuthModeServiceAccount: 'Service Account JSON',
+      vertexAuthModeApiKey: 'API Key',
+      vertexApiKeyHint: '在 Google Cloud 控制台 Agent Platform 的 API Keys 页面创建。Google 显式缓存接口不接受 API Key，此类账号不参与显式缓存与批量生图；隐式缓存正常生效。',
+      vertexApiKeyRequired: '请输入 API Key',
+      vertexApiKeyProjectIdPlaceholder: '可选',
+      vertexApiKeyProjectIdHint: '留空走 Express mode 全局端点（不区分 Location）；绑定 Service Account 的标准 API Key 可填写 Project ID，按 Project ID + Location 访问。',
       vertexSaJsonLabel: 'Service Account JSON',
       vertexSaJsonLoaded: '已读取 Service Account JSON',
       vertexSaJsonDrop: '拖入 Service Account JSON',
@@ -750,8 +776,8 @@ export default {
       vertexSaJsonUploadHint: '上传或拖入 JSON 后会自动读取 project_id，密钥内容仅用于创建账号提交。',
       vertexSaJsonEditHint: 'Service Account JSON 不在编辑页显示；需要更换 JSON 时请删除账号后重新创建。',
       vertexProjectIdPlaceholder: '从 JSON 自动读取',
-      vertexLocationHint: '不同 Vertex 模型可用 location 可能不同，这里选择账号默认 endpoint location。',
-      vertexLocationRequired: '请填写 Vertex location',
+      vertexLocationHint: '不同模型可用 location 可能不同，这里选择账号默认 endpoint location。',
+      vertexLocationRequired: '请选择 Location',
       vertexSaJsonMissingFields: 'Service Account JSON 缺少 project_id、client_email 或 private_key',
       vertexSaJsonMissingProjectId: 'Service Account JSON 缺少 project_id',
       vertexSaJsonMissingClientEmail: 'Service Account JSON 缺少 client_email',
@@ -796,11 +822,13 @@ export default {
         wsModeCtxPool: '上下文池（ctx_pool）',
         wsModePassthrough: '透传（passthrough）',
         wsModeHttpBridge: 'HTTP 桥接（http_bridge）',
+        wsModeWsBridge: 'WebSocket 桥接（ws_bridge）',
         wsModeShared: '共享（shared）',
         wsModeDedicated: '独享（dedicated）',
         wsModeCtxPoolHint: '网关从连接池获取并复用上游 WS 连接，连接池上限由网关配置决定。',
         wsModePassthroughHint: '网关为每个客户端会话单独建立上游 WS 连接，不使用连接池。',
         wsModeHttpBridgeHint: '网关将客户端 WS 请求转换为上游 HTTP 请求，再将 SSE 流式响应转换为 WS 消息返回。',
+        wsModeWsBridgeHint: '网关将客户端流式 HTTP 请求转换为上游 WS 请求，复用上下文池连接，再将 WS 消息转换为 SSE 流式响应返回；WS 请求与上下文池行为一致。非流式请求及超过 HTTP 桥接阈值的请求仍走 HTTP。',
         oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
         oauthResponsesWebsocketsV2Desc:
           '仅对 OpenAI OAuth 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',
@@ -995,6 +1023,12 @@ export default {
       poolModeRetryCountHint: '仅在池模式下生效。0 表示不原地重试；默认 {default}，最大 {max}。',
       poolModeRetryStatusCodes: '同账号重试状态码',
       poolModeRetryStatusCodesHint: '仅在池模式下生效。以英文逗号分隔的 HTTP 状态码（100-599），命中时触发同账号重试。留空使用默认值（{default}）。',
+      explicitCacheUpstream: '上游支持显式缓存',
+      explicitCacheUpstreamHint: '仅当上游是已支持显式缓存的本系统时开启',
+      explicitCacheUpstreamInfo:
+        '开启后该账号可创建 Gemini 显式缓存（cachedContents）：缓存只在本账号上使用，失败不换号。上游必须保证缓存只发往创建它的账号；号池类网关或未支持显式缓存的上游开启后，缓存会时有时无。',
+      explicitCacheUpstreamMaxTTL: '上游缓存有效期上限（秒）',
+      explicitCacheUpstreamMaxTTLHint: '填写上游网关允许的最长有效期，超出的请求不会发往该账号；留空沿用本站上限。',
       customErrorCodes: '自定义错误码',
       customErrorCodesHint: '仅对选中的错误码停止调度',
       customErrorCodesWarning:
@@ -1276,20 +1310,6 @@ export default {
         apiKeyHint: '上游服务的 API Key',
         pleaseEnterBaseUrl: '请输入上游 Base URL',
         pleaseEnterApiKey: '请输入上游 API Key'
-      },
-      adobe: {
-        cookieLabel: 'Adobe Cookie',
-        cookieHint: '先登录 Adobe，打开 firefly.adobe.com/generate/image，在网页上成功生一次图，然后用 Adobe Cookie Exporter 导出 JSON，在账号页「导入」上传；也可把该 JSON 或 Cookie 请求头贴到这里（必须包含 ims_sid）。只从 firefly.adobe.com 复制 document.cookie 不够。可带 “Cookie:” 前缀，也支持 JSON cookie 数组。短期 access token 会据此自动刷新。',
-        credentialStepTitle: '填写凭据',
-        cookiePlaceholder: 'ims_sid=...; aux_sid=...; ...',
-        cookieRequired: '请填写 Adobe Cookie',
-        accessTokenLabel: 'Access Token（可选）',
-        accessTokenHint: '留空则首次刷新时用 cookie 自动换取。仅在你已持有有效 IMS token 时才需要填。',
-        arpLabel: 'ARP Session（可选）',
-        arpPlaceholder: 'Firefly 提交头 x-arp-session-id',
-        arpHint: 'FREE 账号建议填。用导出器时请先在 firefly.adobe.com/generate/image 成功生一次图再导出。收费号可留空。粘贴整份导出 JSON 到 Cookie 框也会自动填入。',
-        relayApiKeyHint: '该外部上游的 API Key（通过 Authorization: Bearer 发送）',
-        relayBaseUrlHint: '外部 OpenAI 兼容上游地址（如 https://your-relay.example.com）'
       },
       kiro: {
         apiKeyHint: 'Kiro API Key（ksk_ 开头），将作为直连 AWS 的 Bearer Token',
@@ -1625,7 +1645,7 @@ export default {
         modelPassthrough: 'Gemini 直接转发模型',
         modelPassthroughDesc: '所有模型请求将直接转发至 Gemini API，不进行模型限制或映射。',
         baseUrlHint: '留空使用官方 Gemini API',
-        apiKeyHint: '您的 Gemini API Key（以 AIza 开头）',
+        apiKeyHint: 'AI Studio 新建的 Key 以 AQ. 开头（旧版以 AIza 开头）；第三方上游填写其提供的 Key',
         tier: {
           label: '账号等级',
           hint: '提示：系统会优先尝试自动识别账号等级；若自动识别不可用或失败，则使用你选择的等级作为回退（本地模拟配额）。',
@@ -1648,8 +1668,8 @@ export default {
         accountType: {
           oauthTitle: 'OAuth 授权（Gemini）',
           oauthDesc: '使用 Google 账号授权，并选择 OAuth 子类型。',
-          apiKeyTitle: 'API 密钥（AI Studio）',
-          apiKeyDesc: '最快接入方式，使用 AIza API Key。',
+          apiKeyTitle: 'API 密钥',
+          apiKeyDesc: 'AI Studio 官方 Key，或兼容 Gemini 协议的第三方上游。',
           apiKeyNote: '适合轻量测试。免费层限流严格，数据可能用于训练。',
           apiKeyLink: '获取 API Key',
           quotaLink: '配额说明'
@@ -1709,7 +1729,7 @@ export default {
           docs: {
             codeAssist: 'Code Assist 配额',
             aiStudio: 'AI Studio 定价',
-            vertex: 'Vertex AI 配额'
+            vertex: 'Agent Platform (Vertex) 配额'
           },
           simulatedNote: '本地模拟配额，仅供参考',
           rows: {
@@ -1766,7 +1786,6 @@ export default {
       geminiAccount: 'Gemini 账号',
       antigravityAccount: 'Antigravity 账号',
       grokAccount: 'Grok 账号',
-      adobeAccount: 'Adobe 账号',
       inputMethod: '输入方式',
       reAuthorizedSuccess: '账号重新授权成功',
       // Test Modal
@@ -1845,7 +1864,8 @@ export default {
         usageTrend: '30天费用与请求趋势',
         noData: '该账号暂无使用数据',
         approxCost: '约{amount}',
-        kiroCredits: '消费Credits'
+        kiroCredits: '消费Credits',
+        leonardoCredits: '消耗积分'
       }
     },
 

@@ -351,6 +351,8 @@ export default {
     accountCost: 'Cost',
     userBilled: 'User billed',
     accountBilled: 'Account billed',
+    upstreamCredits: 'Credits used',
+    upstreamCreditCostApprox: 'approx. {amount}',
     resetNow: 'Now',
     resetPending: 'Pending refresh',
     accountMultiplier: 'Account rate',

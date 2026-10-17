@@ -2,18 +2,21 @@ export const OPENAI_WS_MODE_OFF = 'off'
 export const OPENAI_WS_MODE_CTX_POOL = 'ctx_pool'
 export const OPENAI_WS_MODE_PASSTHROUGH = 'passthrough'
 export const OPENAI_WS_MODE_HTTP_BRIDGE = 'http_bridge'
+export const OPENAI_WS_MODE_WS_BRIDGE = 'ws_bridge'
 
 export type OpenAIWSMode =
   | typeof OPENAI_WS_MODE_OFF
   | typeof OPENAI_WS_MODE_CTX_POOL
   | typeof OPENAI_WS_MODE_PASSTHROUGH
   | typeof OPENAI_WS_MODE_HTTP_BRIDGE
+  | typeof OPENAI_WS_MODE_WS_BRIDGE
 
 const OPENAI_WS_MODES = new Set<OpenAIWSMode>([
   OPENAI_WS_MODE_OFF,
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_PASSTHROUGH,
-  OPENAI_WS_MODE_HTTP_BRIDGE
+  OPENAI_WS_MODE_HTTP_BRIDGE,
+  OPENAI_WS_MODE_WS_BRIDGE
 ])
 
 export interface ResolveOpenAIWSModeOptions {
@@ -50,6 +53,7 @@ export const resolveOpenAIWSModeHintKey = (
   | 'admin.accounts.openai.wsModeCtxPoolHint'
   | 'admin.accounts.openai.wsModePassthroughHint'
   | 'admin.accounts.openai.wsModeHttpBridgeHint'
+  | 'admin.accounts.openai.wsModeWsBridgeHint'
   | null => {
   switch (mode) {
     case OPENAI_WS_MODE_CTX_POOL:
@@ -58,6 +62,8 @@ export const resolveOpenAIWSModeHintKey = (
       return 'admin.accounts.openai.wsModePassthroughHint'
     case OPENAI_WS_MODE_HTTP_BRIDGE:
       return 'admin.accounts.openai.wsModeHttpBridgeHint'
+    case OPENAI_WS_MODE_WS_BRIDGE:
+      return 'admin.accounts.openai.wsModeWsBridgeHint'
     default:
       return null
   }

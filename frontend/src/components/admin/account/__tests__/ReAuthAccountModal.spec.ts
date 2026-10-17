@@ -104,18 +104,6 @@ function buildGrokAccount() {
   } as any
 }
 
-function buildAdobeAccount() {
-  return {
-    id: 77,
-    name: 'Adobe Firefly',
-    platform: 'adobe',
-    type: 'oauth',
-    credentials: { model_mapping: { 'gpt-image-2': 'firefly-gpt-image-2' } },
-    extra: {},
-    proxy_id: null,
-  } as any
-}
-
 function mountModal(account: any = buildKiroIDCAccount()) {
   return mount(ReAuthAccountModal, {
     props: {
@@ -167,7 +155,7 @@ describe('ReAuthAccountModal Kiro regions', () => {
 
 describe('ReAuthAccountModal platform routing', () => {
   beforeEach(() => {
-    applyOAuthCredentialsMock.mockReset().mockResolvedValue({ id: 77, platform: 'adobe' })
+    applyOAuthCredentialsMock.mockReset().mockResolvedValue({ id: 77, platform: 'grok' })
   })
 
   // 回归:Grok 账号曾因 oauthPlatform 缺少分支回落到 anthropic,
@@ -181,131 +169,5 @@ describe('ReAuthAccountModal platform routing', () => {
     const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
     expect(flow.props('platform')).toBe('grok')
     expect(wrapper.text()).toContain('admin.accounts.grokAccount')
-  })
-
-  // Adobe 没有 OAuth URL；缺分支时会落到 Claude。重新授权必须是贴 Cookie。
-  it('shows Adobe cookie form instead of the Claude OAuth flow', async () => {
-    const wrapper = mountModal(buildAdobeAccount())
-
-    await wrapper.setProps({ show: true })
-    await flushPromises()
-
-    expect(wrapper.find('[data-testid="reauth-adobe-cookie-input"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="reauth-generate-url"]').exists()).toBe(false)
-    expect(wrapper.findComponent(OAuthAuthorizationFlowStub).exists()).toBe(false)
-    expect(wrapper.text()).toContain('admin.accounts.adobeAccount')
-    expect(wrapper.text()).not.toContain('admin.accounts.claudeCodeAccount')
-  })
-
-  it('applies a new Adobe cookie and clears the old access token', async () => {
-    const wrapper = mountModal(buildAdobeAccount())
-
-    await wrapper.setProps({ show: true })
-    await flushPromises()
-
-    await wrapper.get('[data-testid="reauth-adobe-cookie-input"]').setValue('ims_sid=new; aux_sid=abc')
-    await wrapper.get('[data-testid="reauth-adobe-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(applyOAuthCredentialsMock).toHaveBeenCalledWith(77, {
-      type: 'oauth',
-      credentials: {
-        model_mapping: { 'gpt-image-2': 'firefly-gpt-image-2' },
-        cookie: 'ims_sid=new; aux_sid=abc',
-        access_token: '',
-      },
-    })
-  })
-
-  it('unwraps pasted sub2api-data JSON into the cookie credential', async () => {
-    const wrapper = mountModal(buildAdobeAccount())
-
-    await wrapper.setProps({ show: true })
-    await flushPromises()
-
-    await wrapper.get('[data-testid="reauth-adobe-cookie-input"]').setValue(JSON.stringify({
-      type: 'sub2api-data',
-      proxies: [],
-      accounts: [
-        {
-          name: 'adobe-jane@example.com',
-          platform: 'adobe',
-          type: 'oauth',
-          credentials: { cookie: 'ims_sid=from-json; aux_sid=abc' }
-        }
-      ]
-    }))
-    await wrapper.get('[data-testid="reauth-adobe-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(applyOAuthCredentialsMock).toHaveBeenCalledWith(77, {
-      type: 'oauth',
-      credentials: {
-        model_mapping: { 'gpt-image-2': 'firefly-gpt-image-2' },
-        cookie: 'ims_sid=from-json; aux_sid=abc',
-        access_token: '',
-      },
-    })
-  })
-
-  it('reauth 粘贴带 ARP 的 JSON 会覆盖 arp_session_id，空则不带该键', async () => {
-    const wrapper = mountModal(buildAdobeAccount())
-
-    await wrapper.setProps({ show: true })
-    await flushPromises()
-
-    await wrapper.get('[data-testid="reauth-adobe-cookie-input"]').setValue(JSON.stringify({
-      type: 'sub2api-data',
-      accounts: [
-        {
-          credentials: {
-            cookie: 'ims_sid=from-json; aux_sid=abc',
-            arp_session_id: 'arp-reauth'
-          }
-        }
-      ]
-    }))
-    await wrapper.get('[data-testid="reauth-adobe-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(applyOAuthCredentialsMock).toHaveBeenCalledWith(77, {
-      type: 'oauth',
-      credentials: {
-        model_mapping: { 'gpt-image-2': 'firefly-gpt-image-2' },
-        cookie: 'ims_sid=from-json; aux_sid=abc',
-        access_token: '',
-        arp_session_id: 'arp-reauth',
-      },
-    })
-  })
-
-  it('reauth 粘贴带 access_token 的 JSON 会写入该键，裸 cookie 仍清空旧 token', async () => {
-    const wrapper = mountModal(buildAdobeAccount())
-
-    await wrapper.setProps({ show: true })
-    await flushPromises()
-
-    await wrapper.get('[data-testid="reauth-adobe-cookie-input"]').setValue(JSON.stringify({
-      type: 'sub2api-data',
-      accounts: [
-        {
-          credentials: {
-            cookie: 'ims_sid=from-json; aux_sid=abc',
-            access_token: 'ims-reauth'
-          }
-        }
-      ]
-    }))
-    await wrapper.get('[data-testid="reauth-adobe-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(applyOAuthCredentialsMock).toHaveBeenCalledWith(77, {
-      type: 'oauth',
-      credentials: {
-        model_mapping: { 'gpt-image-2': 'firefly-gpt-image-2' },
-        cookie: 'ims_sid=from-json; aux_sid=abc',
-        access_token: 'ims-reauth',
-      },
-    })
   })
 })

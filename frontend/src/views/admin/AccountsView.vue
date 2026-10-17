@@ -4,7 +4,6 @@
       <template #filters>
         <div class="flex flex-wrap-reverse items-start justify-between gap-3">
           <AccountTableFilters
-            class="lg:w-auto lg:flex-1"
             v-model:searchQuery="params.search"
             :filters="params"
             :groups="groups"
@@ -306,7 +305,7 @@
               :stats="todayStatsByAccountId[String(row.id)] ?? null"
               :platform="row.platform"
               :kiro-credit-unit-price-usd="getKiroCreditUnitPriceUsd(row)"
-              :is-relay="isKiroRelayAccount(row)"
+              :is-relay="isTodayStatsRelayAccount(row)"
               :loading="todayStatsLoading"
               :error="todayStatsError"
             />
@@ -791,7 +790,6 @@ const accountSupportsBatchUsage = (account: Account) => {
   if (account.platform === 'antigravity') return account.type === 'oauth'
   if (account.platform === 'openai') return account.type === 'oauth'
   if (account.platform === 'grok') return account.type === 'oauth'
-  if (account.platform === 'adobe') return account.type === 'oauth'
   return false
 }
 
@@ -1465,12 +1463,19 @@ const handleKiroUsageMeta = (account: Account, meta: { plan_type?: string }) => 
   }
 }
 
+// 今日统计积分估算单价:Kiro 读 kiro_credit_unit_price_usd,Leonardo 读 leonardo_credit_unit_price_usd。
 const getKiroCreditUnitPriceUsd = (account: Account): number => {
-  if (account.platform !== 'kiro') return 0
-  const raw = account.extra?.kiro_credit_unit_price_usd
+  let raw: unknown
+  if (account.platform === 'kiro') raw = account.extra?.kiro_credit_unit_price_usd
+  else if (account.platform === 'leonardo') raw = account.extra?.leonardo_credit_unit_price_usd
+  else return 0
   const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : 0
   return Number.isFinite(value) && value > 0 ? value : 0
 }
+
+// Leonardo 中转账号(apikey)转发到外部 OpenAI 兼容上游,不消耗 Leonardo 积分;Kiro 沿用原中转判定。
+const isTodayStatsRelayAccount = (account: Account): boolean =>
+  account.platform === 'leonardo' ? account.type === 'apikey' : isKiroRelayAccount(account)
 
 const syncAccountRefs = (nextAccount: Account) => {
   if (edAcc.value?.id === nextAccount.id) edAcc.value = nextAccount

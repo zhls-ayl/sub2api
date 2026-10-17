@@ -225,8 +225,8 @@ func TestSchedulerBulkAccountEventUnknownPlatformFallsBackToAllPlatforms(t *test
 	require.ElementsMatch(t, schedulerBucketsForTest([]int64{41, 42}, platforms...), cache.capturedBuckets())
 }
 
-func TestSchedulerBulkAccountEventScopesAdobeAndKiroRebuildToFreshPlatform(t *testing.T) {
-	for _, platform := range []string{PlatformAdobe, PlatformKiro} {
+func TestSchedulerBulkAccountEventScopesKiroRebuildToFreshPlatform(t *testing.T) {
+	for _, platform := range []string{PlatformKiro} {
 		t.Run(platform, func(t *testing.T) {
 			cache := newBulkEventSnapshotCache()
 			repo := newBulkEventAccountRepo(&Account{ID: 1, Platform: platform, GroupIDs: []int64{12}})

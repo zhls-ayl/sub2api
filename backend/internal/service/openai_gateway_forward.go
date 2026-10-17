@@ -69,7 +69,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if normalized {
 		body = normalizedBody
 	}
-	legacyIngressBody, legacyIngressChanged, legacyIngressErr := normalizeOpenAIResponsesLegacyIngress(body)
+	legacyIngressBody, legacyIngressChanged, legacyIngressErr := normalizeOpenAIResponsesLegacyIngressWithConfig(s.cfg, body)
 	if legacyIngressErr != nil {
 		return nil, legacyIngressErr
 	}
@@ -113,8 +113,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
-	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
+	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用；
+	// 例外是 ws_bridge 模式放行的流式 HTTP 请求。必须在此一次定终：下面的
+	// namespace 处理与 previous_response_id 清理都依赖 wsDecision.Transport。
+	wsBridgeHTTP := s.shouldUseOpenAIWSBridgeForHTTPIngress(ctx, c, account, wsDecision, body, responsesLite)
+	if !wsBridgeHTTP {
+		wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
+	}
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	compactPath := isOpenAIResponsesCompactPath(c)
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
@@ -194,7 +199,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// 账号映射未命中时以去除首尾空白的请求模型兜底，计费名与上游模型名一致。
 		return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, reqModel)
 	case APIProtocolChatCompletions:
-		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
+		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, startTime)
 	}
 	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 	if account.IsOpenAI() && (account.IsOpenAIApiKey() || account.IsOpenAIOAuthLike()) {
@@ -905,11 +910,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				attempt,
 				wsLastFailureReason,
 				&agentTaskRecoveryTried,
+				wsBridgeHTTP,
 			)
 			if wsErr == nil {
 				break
 			}
-			if c != nil && c.Writer != nil && c.Writer.Written() {
+			if wsBridgeHTTP {
+				// 保活注释不是语义输出，不阻止重试。
+				if openAIStreamClientOutputStarted(c, false) {
+					break
+				}
+			} else if c != nil && c.Writer != nil && c.Writer.Written() {
 				break
 			}
 			var taskRecoveredErr *agentIdentityTaskRecoveredError
@@ -921,9 +932,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if reason != "" {
 				wsLastFailureReason = reason
 			}
+			// HTTP 上游遇 5xx/传输失败立即换号；bridge 只对连接级失败在同账号重试一次。
+			if wsBridgeHTTP && retryable && !openAIWSBridgeSameAccountRetryable(reason, attempt) {
+				retryable = false
+			}
 			// previous_response_not_found 说明续链锚点不可用：
 			// 对非 function_call_output 场景，允许一次“去掉 previous_response_id 后重放”。
-			if reason == "previous_response_not_found" && recoverPrevResponseNotFound(attempt) {
+			// HTTP 客户端保持与 HTTP 上游一致的 400 语义，不静默丢弃续链。
+			if reason == "previous_response_not_found" && !wsBridgeHTTP && recoverPrevResponseNotFound(attempt) {
 				continue
 			}
 			if reason == "invalid_encrypted_content" && recoverInvalidEncryptedContent(attempt) {
@@ -1015,7 +1031,27 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				wsResult.ImageInputSize = imageInputSize
 				wsResult.BillingModel = imageBillingModel
 			}
+			if wsBridgeHTTP {
+				// 绑定 HTTP 续接归属，否则后续带 previous_response_id 的 HTTP 请求会被 owner 校验拒绝。
+				s.bindHTTPResponseAccount(ctx, c, account, wsResult.ResponseID)
+				if account.IsShadow() && account.ParentAccountID != nil {
+					notifyOpenAIAutoReset(*account.ParentAccountID)
+				}
+			}
 			return wsResult, nil
+		}
+		if wsBridgeHTTP {
+			clearOpenAIWSBridgeAttemptHeaders(c)
+			var failoverErr *UpstreamFailoverError
+			if errors.As(wsErr, &failoverErr) {
+				return nil, wsErr
+			}
+			if failoverErr = s.newOpenAIWSBridgeFallbackFailoverError(ctx, c, account, upstreamModel, wsErr); failoverErr != nil {
+				return nil, failoverErr
+			}
+			if s.writeOpenAIWSBridgeCommittedFallbackError(c, account, originalModel, wsErr) {
+				return nil, wsErr
+			}
 		}
 		s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
 		return nil, wsErr
