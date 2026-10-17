@@ -6028,6 +6028,31 @@
             </div>
           </div>
 
+          <!-- Kiro mixed-tool web search -->
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.kiroMixedToolWebSearch.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.kiroMixedToolWebSearch.description") }}
+              </p>
+            </div>
+            <div class="p-6">
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.kiroMixedToolWebSearch.enabled") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.kiroMixedToolWebSearch.enabledHint") }}
+                  </p>
+                </div>
+                <Toggle v-model="kiroMixedToolWebSearchEnabled" />
+              </div>
+            </div>
+          </div>
+
           <!-- Web Search Emulation -->
           <div class="card">
             <div
@@ -10492,6 +10517,8 @@ const webSearchProxies = ref<Proxy[]>([]);
 // Web Search Emulation config (loaded/saved separately)
 const DEFAULT_WEB_SEARCH_QUOTA_LIMIT = 1000;
 
+const kiroMixedToolWebSearchEnabled = ref(false);
+
 const webSearchConfig = reactive<WebSearchEmulationConfig>({
   enabled: false,
   providers: [],
@@ -10619,6 +10646,30 @@ async function testWebSearchProvider() {
     appStore.showError(extractApiErrorMessage(err, t("common.error")));
   } finally {
     wsTestLoading.value = false;
+  }
+}
+
+async function loadKiroMixedToolWebSearchConfig() {
+  try {
+    const cfg = await adminAPI.settings.getKiroMixedToolWebSearchConfig();
+    kiroMixedToolWebSearchEnabled.value = cfg?.enabled ?? false;
+  } catch (err: unknown) {
+    const status = (err as { status?: number })?.status;
+    if (status !== 404 && status !== undefined) {
+      appStore.showError(extractApiErrorMessage(err, t("common.error")));
+    }
+  }
+}
+
+async function saveKiroMixedToolWebSearchConfig(): Promise<boolean> {
+  try {
+    await adminAPI.settings.updateKiroMixedToolWebSearchConfig({
+      enabled: kiroMixedToolWebSearchEnabled.value,
+    });
+    return true;
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t("common.error")));
+    return false;
   }
 }
 
@@ -11422,6 +11473,7 @@ async function loadSettings() {
 
     // Load web search emulation config separately
     await loadWebSearchConfig();
+    await loadKiroMixedToolWebSearchConfig();
   } catch (error: unknown) {
     loadFailed.value = true;
     appStore.showError(
@@ -12141,10 +12193,11 @@ async function saveSettings() {
     }
     // Save web search emulation config separately (errors handled internally)
     const wsOk = await saveWebSearchConfig();
+    const mixedOk = await saveKiroMixedToolWebSearchConfig();
     // Refresh cached settings so sidebar/header update immediately
     await appStore.fetchPublicSettings(true);
     await adminSettingsStore.fetch(true);
-    if (wsOk) {
+    if (wsOk && mixedOk) {
       appStore.showSuccess(t("admin.settings.settingsSaved"));
     }
   } catch (error: unknown) {

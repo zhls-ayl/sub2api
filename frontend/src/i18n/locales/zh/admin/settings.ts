@@ -616,6 +616,13 @@ export default {
         codexAddRow: '添加一条',
         codexRemoveRow: '删除',
       },
+      kiroMixedToolWebSearch: {
+        title: 'Kiro 混合工具 web search',
+        description:
+          '当 Kiro 请求同时包含 web_search 和其他工具时，在本地执行 web_search 并继续请求，直到模型结束或调用其他工具。只包含 web_search 的请求走原有路径，不依赖这个开关。默认关闭。',
+        enabled: '启用混合工具 web search',
+        enabledHint: '全局默认值。每个 Kiro 分组可以单独强制开启或关闭。与 Web Search 模拟无关。',
+      },
       webSearchEmulation: {
         title: 'Web Search 模拟',
         description: '为不原生支持搜索的 Anthropic API Key 账号注入 web search 能力',

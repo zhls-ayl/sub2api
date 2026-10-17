@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
@@ -467,6 +469,73 @@ func (h *SettingHandler) GetWebSearchEmulationConfig(c *gin.Context) {
 		return
 	}
 	response.Success(c, service.PopulateWebSearchUsage(c.Request.Context(), cfg))
+}
+
+// GetKiroMixedToolWebSearchConfig 读取 Kiro 混合工具 web_search 开关。
+// GET /api/v1/admin/settings/kiro-mixed-tool-web-search
+func (h *SettingHandler) GetKiroMixedToolWebSearchConfig(c *gin.Context) {
+	cfg, err := h.settingService.GetKiroMixedToolWebSearchConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cfg)
+}
+
+// UpdateKiroMixedToolWebSearchConfig 更新全局开关。省略 group_modes 时保留已有分组覆盖；
+// 显式传入空对象会清空分组覆盖。
+// PUT /api/v1/admin/settings/kiro-mixed-tool-web-search
+func (h *SettingHandler) UpdateKiroMixedToolWebSearchConfig(c *gin.Context) {
+	var raw map[string]json.RawMessage
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	var enabled bool
+	if payload, ok := raw["enabled"]; ok {
+		if err := json.Unmarshal(payload, &enabled); err != nil {
+			response.BadRequest(c, "Invalid enabled flag")
+			return
+		}
+	}
+	var groupModes *map[string]string
+	if payload, ok := raw["group_modes"]; ok {
+		modes := map[string]string{}
+		if err := json.Unmarshal(payload, &modes); err != nil {
+			response.BadRequest(c, "Invalid group_modes")
+			return
+		}
+		groupModes = &modes
+	}
+	updated, err := h.settingService.SaveKiroMixedToolWebSearchConfig(c.Request.Context(), enabled, groupModes)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, updated)
+}
+
+// UpdateKiroMixedToolWebSearchGroupMode 设置单个分组的混合工具 web_search 覆盖。
+// PUT /api/v1/admin/settings/kiro-mixed-tool-web-search/groups/:id
+func (h *SettingHandler) UpdateKiroMixedToolWebSearchGroupMode(c *gin.Context) {
+	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || groupID <= 0 {
+		response.BadRequest(c, "Invalid group id")
+		return
+	}
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	updated, err := h.settingService.SetKiroMixedToolWebSearchGroupMode(c.Request.Context(), groupID, req.Mode)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, updated)
 }
 
 // UpdateWebSearchEmulationConfig 更新 Web Search 模拟配置

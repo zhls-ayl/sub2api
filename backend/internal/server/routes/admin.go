@@ -636,6 +636,10 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		adminSettings.PUT("/web-search-emulation", h.Admin.Setting.UpdateWebSearchEmulationConfig)
 		adminSettings.POST("/web-search-emulation/test", h.Admin.Setting.TestWebSearchEmulation)
 		adminSettings.POST("/web-search-emulation/reset-usage", h.Admin.Setting.ResetWebSearchUsage)
+		// Kiro 混合工具 web_search。默认关闭，与 web_search_emulation 无关。
+		adminSettings.GET("/kiro-mixed-tool-web-search", h.Admin.Setting.GetKiroMixedToolWebSearchConfig)
+		adminSettings.PUT("/kiro-mixed-tool-web-search", h.Admin.Setting.UpdateKiroMixedToolWebSearchConfig)
+		adminSettings.PUT("/kiro-mixed-tool-web-search/groups/:id", h.Admin.Setting.UpdateKiroMixedToolWebSearchGroupMode)
 	}
 }
 

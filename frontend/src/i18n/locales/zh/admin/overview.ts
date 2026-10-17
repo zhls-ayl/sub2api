@@ -985,6 +985,15 @@ export default {
         typesafe: 'TypeSafe / Jev',
         composite: 'Composite',
       },
+      kiroMixedToolWebSearch: {
+        title: '混合工具 web search',
+        description:
+          '在同时包含其他工具的请求里执行 web_search，并继续请求，直到模型结束或调用非搜索工具。默认跟随全局设置，全局默认为关闭。',
+        mode: '分组覆盖',
+        modeDefault: '跟随全局设置',
+        modeEnabled: '开启',
+        modeDisabled: '关闭',
+      },
       kiroCache: {
         description: '仅对当前 Kiro 分组模拟 Anthropic Prompt Cache 用量。',
         enabled: '启用模拟缓存',

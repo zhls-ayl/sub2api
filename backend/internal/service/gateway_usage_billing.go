@@ -1028,6 +1028,24 @@ func addCacheStorageToAccountStatsCost(usageLog *UsageLog, storageCost float64) 
 	usageLog.AccountStatsCost = &cost
 }
 
+// applyWebSearchCallSurcharge adds Group.WebSearchPricePerCall × calls.
+// A nil price does not fall back to the Codex default of $0.01.
+func applyWebSearchCallSurcharge(tokenCost *CostBreakdown, billing *BillingService, calls int, price *float64, multiplier float64) *CostBreakdown {
+	if billing == nil || calls <= 0 || price == nil {
+		return tokenCost
+	}
+	extra := billing.CalculateWebSearchCost(calls, price, multiplier)
+	if extra == nil || (extra.TotalCost == 0 && extra.ActualCost == 0) {
+		return tokenCost
+	}
+	if tokenCost == nil {
+		return extra
+	}
+	tokenCost.TotalCost += extra.TotalCost
+	tokenCost.ActualCost += extra.ActualCost
+	return tokenCost
+}
+
 // calculateRecordUsageCost 根据请求类型计算费用。
 func (s *GatewayService) calculateRecordUsageCost(
 	ctx context.Context,
@@ -1086,6 +1104,15 @@ func (s *GatewayService) calculateRecordUsageCost(
 			tokenCost.TotalCost += searchCost.TotalCost
 			tokenCost.ActualCost += searchCost.ActualCost
 		}
+	}
+	if result.WebSearchCalls > 0 {
+		price := webSearchPricePerCallFromAPIKey(apiKey)
+		if price == nil {
+			logger.LegacyPrintf("service.gateway", "[Billing] web_search_price_per_call unset; skipping web search per-call surcharge model=%s calls=%d", billingModel, result.WebSearchCalls)
+		} else if *price == 0 {
+			logger.LegacyPrintf("service.gateway", "[Billing] web_search_price_per_call explicit 0; web search free model=%s calls=%d", billingModel, result.WebSearchCalls)
+		}
+		tokenCost = applyWebSearchCallSurcharge(tokenCost, s.billingService, result.WebSearchCalls, price, multiplier)
 	}
 	// 显式缓存存储费同为叠加 surcharge，与 token 费用使用同一计费模型与倍率。
 	if storageCost := s.cacheStorageCost(result, billingModel); storageCost > 0 {
