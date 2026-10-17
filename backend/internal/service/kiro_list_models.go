@@ -143,12 +143,24 @@ func buildKiroListModelsRequest(ctx context.Context, account *Account, token, re
 	}
 	accountKey := buildKiroAccountKey(account)
 	machineID := buildKiroMachineID(account)
+	userAgent := kiropkg.BuildRuntimeUserAgent(accountKey, machineID)
+	amzUserAgent := kiropkg.BuildRuntimeAmzUserAgent(accountKey, machineID)
+	sdkRequest := "attempt=1; max=3"
+	oauthList := account != nil && account.Type == AccountTypeOAuth
+	if oauthList {
+		userAgent = kiropkg.BuildUsageRuntimeUserAgent(accountKey, machineID)
+		amzUserAgent = kiropkg.BuildUsageRuntimeAmzUserAgent(accountKey, machineID)
+		sdkRequest = "attempt=1; max=1"
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", kiropkg.BuildRuntimeUserAgent(accountKey, machineID))
-	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRuntimeAmzUserAgent(accountKey, machineID))
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("X-Amz-User-Agent", amzUserAgent)
+	if oauthList {
+		req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+	}
 	req.Header.Set("x-amzn-codewhisperer-optout", "true")
-	req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
+	req.Header.Set("Amz-Sdk-Request", sdkRequest)
 	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.NewString())
 	applyKiroConditionalHeaders(req, account)
 	return req, nil
