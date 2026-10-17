@@ -751,6 +751,10 @@ const (
 
 	// Web Search Emulation
 	SettingKeyWebSearchEmulationConfig = "web_search_emulation_config" // JSON 配置
+	// SettingKeyKiroMixedToolWebSearchConfig 控制 Kiro 混合工具 web_search 循环。
+	// 缺省与 {"enabled":false} 都关闭。仅当请求同时包含 web_search 和其他工具时生效；
+	// 只有 web_search 的请求不读这个开关。
+	SettingKeyKiroMixedToolWebSearchConfig = "kiro_mixed_tool_web_search_config"
 )
 
 // SettingKeyDefaultPlatformQuotas —— 系统全局：每用户 × 平台日/周/月 USD 上限（JSON）。
