@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/adobe"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
@@ -132,9 +131,9 @@ func NewTokenRefreshService(
 		grokOAuthService = grokOAuthServices[0]
 	}
 	grokRefresher := NewGrokTokenRefresher(grokOAuthService)
-	// Adobe 没有 refresh_token：长期凭据是账号里的浏览器 cookie，刷新器不依赖任何
+	// Leonardo 没有 refresh_token：长期凭据是账号里的浏览器 cookie，刷新器不依赖任何
 	// OAuth service，故直接构造。
-	adobeRefresher := NewAdobeTokenRefresher()
+	leonardoRefresher := NewLeonardoTokenRefresher()
 
 	// Each provider is registered exactly once. The same registry supplies both
 	// execution and repository eligibility, preventing future platform drift.
@@ -145,7 +144,7 @@ func NewTokenRefreshService(
 		{platform: PlatformAntigravity, refresher: agRefresher, executor: agRefresher},
 		{platform: PlatformKiro, refresher: kiroRefresher, executor: kiroRefresher},
 		{platform: PlatformGrok, refresher: grokRefresher, executor: grokRefresher},
-		{platform: PlatformAdobe, refresher: adobeRefresher, executor: adobeRefresher},
+		{platform: PlatformLeonardo, refresher: leonardoRefresher, executor: leonardoRefresher},
 	}
 
 	return s
@@ -156,7 +155,7 @@ func NewTokenRefreshService(
 func cookieCredentialRefreshPlatforms(platforms []string) []string {
 	var out []string
 	for _, platform := range platforms {
-		if platform == PlatformAdobe {
+		if platform == PlatformLeonardo {
 			out = append(out, platform)
 		}
 	}
@@ -1009,9 +1008,9 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 		if isNonRetryableRefreshError(err) {
 			errorMsg := "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
 			isGrokOAuth := account.IsGrokOAuth()
-			// Grok / Adobe 走条件置错，可能因凭据已变而跳过，通知推迟到确认落库之后。
-			isAdobe := account.Platform == PlatformAdobe
-			if !isGrokOAuth && !isAdobe {
+			// Grok / Leonardo 走条件置错，可能因凭据已变而跳过，通知推迟到确认落库之后。
+			isLeonardo := account.Platform == PlatformLeonardo
+			if !isGrokOAuth && !isLeonardo {
 				s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
 			}
 			s.clearAntigravityForceTokenRefresh(ctx, account, "non_retryable")
@@ -1036,11 +1035,11 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 						return errRefreshSkipped
 					}
 				}
-			} else if isAdobe {
-				// cookie 在 IMS 往返期间被管理员替换时，旧 cookie 的失效结论不能隔离新 cookie。
-				persistentlyBlocked, setErr = setAdobeCookieRefreshError(ctx, s.accountRepo, account, errorMsg)
+			} else if isLeonardo {
+				// cookie 在 get-session 往返期间被管理员替换时，旧 cookie 的失效结论不能隔离新 cookie。
+				persistentlyBlocked, setErr = setLeonardoCookieRefreshError(ctx, s.accountRepo, account, errorMsg)
 				if setErr == nil && !persistentlyBlocked {
-					slog.Info("token_refresh.adobe_error_status_skipped_cookie_changed", "account_id", account.ID)
+					slog.Info("token_refresh.leonardo_error_status_skipped_cookie_changed", "account_id", account.ID)
 					return errRefreshSkipped
 				}
 			} else {
@@ -1057,7 +1056,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 						err: fmt.Errorf("failed to conditionally persist Grok OAuth refresh failure: %w", setErr),
 					}
 				}
-			} else if (isGrokOAuth || isAdobe) && persistentlyBlocked {
+			} else if isGrokOAuth && persistentlyBlocked {
 				s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
 			}
 			cacheInvalidationFailed := false
@@ -1112,12 +1111,6 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 		"max_retries", maxRetries,
 		"error", logredact.RedactText(lastErr.Error()),
 	)
-
-	// Adobe 的刷新临时失败（IMS 5xx、非强信号的 401/403、网络）不改账号状态：旧 token 可能仍可用，
-	// 请求路径会按需回退旧 token 或当次换号；摘出调度只会让一次全局 IMS 故障拖垮整个账号池。
-	if account.Platform == PlatformAdobe {
-		return lastErr
-	}
 
 	// 设置临时不可调度 10 分钟（不标记 error，保持 status=active 让下个刷新周期能继续尝试）
 	until := time.Now().Add(tokenRefreshTempUnschedDuration)
@@ -1453,18 +1446,6 @@ func isNonRetryableRefreshError(err error) bool {
 	var kiroInvalidGrant *kiropkg.RefreshTokenInvalidError
 	if errors.As(err, &kiroInvalidGrant) {
 		return true
-	}
-	// Adobe has no refresh_token: IMS AuthError means the browser cookie is dead
-	// and only a re-export can recover the account.
-	var adobeAuth *adobe.AuthError
-	if errors.As(err, &adobeAuth) {
-		return true
-	}
-	// Adobe 的临时错误信息里带着上游 body 预览（WAF 页面、IMS JSON 等），可能恰好含下面的
-	// 关键字（如 access_denied）；已被 adobe 包判为临时故障的错误不能再靠子串升级成永久失效。
-	var adobeTemporary *adobe.UpstreamTemporaryError
-	if errors.As(err, &adobeTemporary) {
-		return false
 	}
 	msg := strings.ToLower(err.Error())
 	nonRetryable := []string{

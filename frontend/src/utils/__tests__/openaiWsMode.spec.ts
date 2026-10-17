@@ -4,6 +4,7 @@ import {
   OPENAI_WS_MODE_HTTP_BRIDGE,
   OPENAI_WS_MODE_OFF,
   OPENAI_WS_MODE_PASSTHROUGH,
+  OPENAI_WS_MODE_WS_BRIDGE,
   isOpenAIWSModeEnabled,
   normalizeOpenAIWSMode,
   openAIWSModeFromEnabled,
@@ -17,6 +18,7 @@ describe('openaiWsMode utils', () => {
     expect(normalizeOpenAIWSMode('ctx_pool')).toBe(OPENAI_WS_MODE_CTX_POOL)
     expect(normalizeOpenAIWSMode('passthrough')).toBe(OPENAI_WS_MODE_PASSTHROUGH)
     expect(normalizeOpenAIWSMode('http_bridge')).toBe(OPENAI_WS_MODE_HTTP_BRIDGE)
+    expect(normalizeOpenAIWSMode(' WS_BRIDGE ')).toBe(OPENAI_WS_MODE_WS_BRIDGE)
     expect(normalizeOpenAIWSMode(' Shared ')).toBe(OPENAI_WS_MODE_CTX_POOL)
     expect(normalizeOpenAIWSMode('DEDICATED')).toBe(OPENAI_WS_MODE_CTX_POOL)
     expect(normalizeOpenAIWSMode('invalid')).toBeNull()
@@ -57,6 +59,7 @@ describe('openaiWsMode utils', () => {
     expect(isOpenAIWSModeEnabled(OPENAI_WS_MODE_CTX_POOL)).toBe(true)
     expect(isOpenAIWSModeEnabled(OPENAI_WS_MODE_PASSTHROUGH)).toBe(true)
     expect(isOpenAIWSModeEnabled(OPENAI_WS_MODE_HTTP_BRIDGE)).toBe(true)
+    expect(isOpenAIWSModeEnabled(OPENAI_WS_MODE_WS_BRIDGE)).toBe(true)
   })
 
   it('hides the off hint and resolves each active mode separately', () => {
@@ -69,6 +72,9 @@ describe('openaiWsMode utils', () => {
     )
     expect(resolveOpenAIWSModeHintKey(OPENAI_WS_MODE_HTTP_BRIDGE)).toBe(
       'admin.accounts.openai.wsModeHttpBridgeHint'
+    )
+    expect(resolveOpenAIWSModeHintKey(OPENAI_WS_MODE_WS_BRIDGE)).toBe(
+      'admin.accounts.openai.wsModeWsBridgeHint'
     )
   })
 })

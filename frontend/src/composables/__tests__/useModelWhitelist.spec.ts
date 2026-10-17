@@ -108,6 +108,16 @@ describe('useModelWhitelist', () => {
     ]))
   })
 
+  it('Claude 默认白名单保存后允许 Haiku 5.5，预设使用同一模型 ID', () => {
+    const models: string[] = getModelsByPlatform('anthropic')
+    const mapping: Record<string, string> | null = buildModelMappingObject('whitelist', models, [])
+
+    expect(mapping?.['claude-haiku-5-5']).toBe('claude-haiku-5-5')
+    expect(getPresetMappingsByPlatform('anthropic')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Haiku 5.5', from: 'claude-haiku-5-5', to: 'claude-haiku-5-5' })
+    ]))
+  })
+
   it('xAI 模型列表包含 Grok 4.5 官方模型和别名', () => {
     const models = getModelsByPlatform('grok')
 
@@ -241,6 +251,21 @@ describe('useModelWhitelist', () => {
     const models = getModelsByPlatform('antigravity')
 
     expect(models).toContain('gemini-3.1-pro')
+  })
+
+  it('Gemini 4 Argon 在 gemini 与 antigravity 平台使用对应真实模型 ID 与预设映射', () => {
+    expect(getModelsByPlatform('gemini')).toContain('gemini-4-argon')
+    const agModels = getModelsByPlatform('antigravity')
+    expect(agModels).not.toContain('gemini-4-argon')
+    expect(agModels).toContain('gemini-4-argon-high')
+    expect(agModels).toContain('gemini-4-argon-medium')
+    expect(agModels).toContain('gemini-4-argon-low')
+    expect(getPresetMappingsByPlatform('antigravity')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'gemini-4-argon', to: 'gemini-4-argon-high' }),
+      expect.objectContaining({ from: 'gemini-4-argon-high', to: 'gemini-4-argon-high' }),
+      expect.objectContaining({ from: 'gemini-4-argon-medium', to: 'gemini-4-argon-medium' }),
+      expect.objectContaining({ from: 'gemini-4-argon-low', to: 'gemini-4-argon-low' })
+    ]))
   })
 
   it('whitelist 模式会忽略通配符条目', () => {
@@ -385,75 +410,13 @@ describe('useModelWhitelist', () => {
     expect(mapping).toEqual({ 'claude-sonnet-5-5': 'claude-sonnet-5-5' })
   })
 
-  // 逐条对齐 backend/internal/domain/constants.go 的 DefaultAdobeModelMapping
-  // 与 backend/internal/pkg/adobe 的 externalImageModelAliases。
-  //
-  // Step 10 起 Adobe 用通用的白名单/映射区块，不再预填默认映射行；但它们仍是「映射」
-  // 模式的快捷 chips，点一下就会原样写进 credentials.model_mapping，两边漂移
-  // 就是静默的路由错误。
-  it('adobe 预设映射与后端 DefaultAdobeModelMapping 逐条一致', () => {
-    const mappings = getPresetMappingsByPlatform('adobe')
-
-    const asObject = Object.fromEntries(mappings.map(({ from, to }) => [from, to]))
-    expect(asObject).toEqual({
-      'gpt-image-2': 'firefly-gpt-image-2',
-      'gpt-image-1.5': 'firefly-gpt-image-1.5',
-      // Step 8：sunburst 是 UI 展示名，映到上游 modelVersion=gpt-image-2.5-prism。
-      'gpt-image-2.5-sunburst': 'firefly-gpt-image-2-5-prism',
-      'gpt-image-2.5-prism': 'firefly-gpt-image-2-5-prism',
-      'gpt-image-2.5-flare': 'firefly-gpt-image-2-5-flare',
-      'gpt-image': 'firefly-gpt-image-2',
-      'gpt-image-1': 'firefly-gpt-image-2',
-      'gpt-image-1-mini': 'firefly-gpt-image-2',
-      'gemini-3-pro-image': 'firefly-nano-banana-pro',
-      'gemini-3-pro-image-preview': 'firefly-nano-banana-pro',
-      'gemini-2.5-flash-image': 'firefly-nano-banana',
-      'gemini-2.5-flash-image-preview': 'firefly-nano-banana',
-      'gemini-3.1-flash-image': 'firefly-nano-banana2',
-      'gemini-3.1-flash-image-preview': 'firefly-nano-banana2',
-      'nano-banana-pro': 'firefly-nano-banana-pro',
-      'nano-banana2': 'firefly-nano-banana2',
-      'nano-banana': 'firefly-nano-banana',
-      'flux-pro': 'firefly-flux-pro',
-      'flux-ultra': 'firefly-flux-ultra',
-      'imagen-4': 'firefly-imagen-4',
-      'imagen-4-fast': 'firefly-imagen-4-fast',
-      'gpt-4o-image': 'firefly-gpt-4o-image',
-      'runway-gen4-image': 'firefly-runway-gen4-image'
-      // Step 8：所有 firefly-* 左侧的直通条目已删除。用户面只有干净外部名。
-    })
-    expect(mappings).toHaveLength(23)
-  })
-
-  // Step 8：用户面看到的每个模型（getModelsByPlatform('adobe')）都必须能在预设里找到——
-  // 否则用户看到一个 id 但预设映射不到，做出的映射条目会打不通。
-  // to 是内部族 id（firefly-*），不再等于 from。
-  it('adobe 预设映射覆盖 adobeModels 里的每个外部名', () => {
-    const presets = getPresetMappingsByPlatform('adobe')
-    const froms = new Set(presets.map(item => item.from))
-
-    for (const externalID of getModelsByPlatform('adobe')) {
-      expect(froms.has(externalID)).toBe(true)
-      expect(externalID.startsWith('firefly-')).toBe(false)  // 干净外部名，不带前缀
-    }
-  })
-
-  // preview 名也在后端默认映射里，白名单同步漏掉它们会让勾了白名单的账号拒掉这些请求。
-  it('adobe 同步列表包含 gemini 生图的 preview 名', () => {
-    const models = getModelsByPlatform('adobe')
-
-    for (const id of ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image-preview', 'gemini-3.1-flash-image-preview']) {
-      expect(models).toContain(id)
-    }
-  })
-
-  it('adobe 映射支持通配符前缀，且目标模型不允许带通配符', () => {
+  it('映射支持通配符前缀，且目标模型不允许带通配符', () => {
     expect(
-      buildModelMappingObject('mapping', [], [{ from: 'gpt-image-*', to: 'firefly-gpt-image-2' }])
-    ).toEqual({ 'gpt-image-*': 'firefly-gpt-image-2' })
+      buildModelMappingObject('mapping', [], [{ from: 'gpt-image-*', to: 'gpt-image-2' }])
+    ).toEqual({ 'gpt-image-*': 'gpt-image-2' })
 
     expect(
-      buildModelMappingObject('mapping', [], [{ from: 'gpt-image-2', to: 'firefly-*' }])
+      buildModelMappingObject('mapping', [], [{ from: 'gpt-image-2', to: 'gpt-image-*' }])
     ).toBeNull()
   })
 

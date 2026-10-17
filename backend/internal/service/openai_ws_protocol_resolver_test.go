@@ -251,6 +251,20 @@ func TestOpenAIWSProtocolResolver_Resolve_ModeRouterV2(t *testing.T) {
 		require.Equal(t, "ws_v2_mode_http_bridge", decision.Reason)
 	})
 
+	t.Run("ws_bridge mode routes to ws v2", func(t *testing.T) {
+		wsBridgeAccount := &Account{
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Concurrency: 1,
+			Extra: map[string]any{
+				"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeWSBridge,
+			},
+		}
+		decision := NewOpenAIWSProtocolResolver(cfg).Resolve(wsBridgeAccount)
+		require.Equal(t, OpenAIUpstreamTransportResponsesWebsocketV2, decision.Transport)
+		require.Equal(t, "ws_v2_mode_ws_bridge", decision.Reason)
+	})
+
 	t.Run("non-positive concurrency is rejected in v2 router", func(t *testing.T) {
 		invalidConcurrency := &Account{
 			Platform: PlatformOpenAI,

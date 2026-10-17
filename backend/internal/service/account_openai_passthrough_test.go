@@ -301,6 +301,22 @@ func TestAccount_ResolveOpenAIResponsesWebSocketV2Mode(t *testing.T) {
 		require.Equal(t, OpenAIWSIngressModeHTTPBridge, account.ResolveOpenAIResponsesWebSocketV2Mode(OpenAIWSIngressModeCtxPool))
 	})
 
+	t.Run("oauth mode supports ws_bridge", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeWSBridge,
+			},
+		}
+		require.Equal(t, OpenAIWSIngressModeWSBridge, account.ResolveOpenAIResponsesWebSocketV2Mode(OpenAIWSIngressModeCtxPool))
+	})
+
+	t.Run("ws_bridge default mode is honored", func(t *testing.T) {
+		account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+		require.Equal(t, OpenAIWSIngressModeWSBridge, account.ResolveOpenAIResponsesWebSocketV2Mode(OpenAIWSIngressModeWSBridge))
+	})
+
 	t.Run("legacy enabled maps to ctx_pool", func(t *testing.T) {
 		account := &Account{
 			Platform: PlatformOpenAI,

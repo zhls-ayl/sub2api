@@ -716,35 +716,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	}
 
 	// Return appropriate error response
-	var errType, errMsg string
-	var statusCode int
-
-	switch resp.StatusCode {
-	case 401:
-		statusCode = http.StatusBadGateway
-		errType = "upstream_error"
-		errMsg = "Upstream authentication failed, please contact administrator"
-	case 402:
-		statusCode = http.StatusBadGateway
-		errType = "upstream_error"
-		errMsg = "Upstream payment required: insufficient balance or billing issue"
-	case 403:
-		statusCode = http.StatusBadGateway
-		errType = "upstream_error"
-		errMsg = "Upstream access forbidden, please contact administrator"
-	case 429:
-		statusCode = http.StatusTooManyRequests
-		errType = "rate_limit_error"
-		errMsg = "Upstream rate limit exceeded, please retry later"
-	default:
-		statusCode = http.StatusBadGateway
-		errType = "upstream_error"
-		errMsg = "Upstream request failed"
-	}
-	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
-		errMsg = upstreamMsg
-	}
-
+	statusCode, errType, errMsg := openAIUpstreamGenericClientError(resp.StatusCode, upstreamMsg, body)
 	c.JSON(statusCode, gin.H{
 		"error": gin.H{
 			"type":    errType,
@@ -911,4 +883,37 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 
 	writeError(c, resp.StatusCode, errType, upstreamMsg)
 	return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
+}
+
+// openAIUpstreamGenericClientError 把非确定性的上游错误状态映射为回给客户端的
+// 状态码、type 与 message：凭据/计费类问题不暴露上游细节，上下文窗口错误保留原文。
+func openAIUpstreamGenericClientError(upstreamStatus int, upstreamMsg string, body []byte) (int, string, string) {
+	var errType, errMsg string
+	var statusCode int
+	switch upstreamStatus {
+	case 401:
+		statusCode = http.StatusBadGateway
+		errType = "upstream_error"
+		errMsg = "Upstream authentication failed, please contact administrator"
+	case 402:
+		statusCode = http.StatusBadGateway
+		errType = "upstream_error"
+		errMsg = "Upstream payment required: insufficient balance or billing issue"
+	case 403:
+		statusCode = http.StatusBadGateway
+		errType = "upstream_error"
+		errMsg = "Upstream access forbidden, please contact administrator"
+	case 429:
+		statusCode = http.StatusTooManyRequests
+		errType = "rate_limit_error"
+		errMsg = "Upstream rate limit exceeded, please retry later"
+	default:
+		statusCode = http.StatusBadGateway
+		errType = "upstream_error"
+		errMsg = "Upstream request failed"
+	}
+	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
+		errMsg = upstreamMsg
+	}
+	return statusCode, errType, errMsg
 }

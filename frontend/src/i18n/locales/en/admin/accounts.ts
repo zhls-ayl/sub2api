@@ -79,8 +79,6 @@ export default {
       editAccount: 'Edit Account',
       deleteAccount: 'Delete Account',
       searchAccounts: 'Search accounts...',
-      moreFilters: 'More filters',
-      moreFiltersActive: 'More filters ({count} active)',
       notes: 'Notes',
       notesPlaceholder: 'Enter notes',
       notesHint: 'Notes are optional',
@@ -114,6 +112,8 @@ export default {
       kiroCooldown: 'Kiro Cooldown',
       kiroCreditUnitPriceUsd: 'Credit Unit Price',
       kiroCreditUnitPriceUsdHint: 'Used only to estimate Kiro Credits cost in today stats. 0 hides the estimate.',
+      leonardoCreditUnitPriceUsd: 'Credit Unit Price (USD)',
+      leonardoCreditUnitPriceUsdHint: 'Used only to estimate the cost of Leonardo credits in today stats; 0 hides the estimate. Reference (monthly fee ÷ monthly fast credits): Essential $12 / 8,500 ≈ $0.0014, Premium $30 / 25,000 = $0.0012, Ultimate $60 / 60,000 = $0.001. Annual billing is cheaper.',
       kiroProfileError: 'Profile Error',
       kiroProfileHint: 'Resolve and save a valid profileArn for this account',
       kiroRuntimeResetsAt: 'Auto resumes at {time}',
@@ -121,6 +121,7 @@ export default {
       kiroUsageForbidden: 'Usage Forbidden',
       kiroUsageForbiddenHint: 'Usage fetch is blocked for this account, but request forwarding may still work',
       platforms: {
+        leonardo: 'Leonardo',
         anthropic: 'Anthropic',
         claude: 'Claude',
         openai: 'OpenAI',
@@ -128,7 +129,6 @@ export default {
         antigravity: 'Antigravity',
         grok: 'Grok',
         kiro: 'Kiro',
-        adobe: 'Adobe',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
@@ -239,9 +239,9 @@ export default {
         grokOauth: 'Grok OAuth',
         kiroApikey: 'Connect to AWS directly via API Key',
         kiroApikeyRelay: 'Relay via external API Key + Base URL',
+        leonardoOauth: 'Leonardo web Cookie, direct GraphQL',
+        leonardoApikeyRelay: 'OpenAI-compatible relay fallback',
         kiroOauth: 'Social OAuth / AWS Builder ID / Import',
-        adobeOauth: 'Firefly cookie',
-        adobeApikeyRelay: 'Relay via external API Key + Base URL',
         antigravityApikey: 'Connect via Base URL + API Key',
         upstream: 'Upstream',
         upstreamDesc: 'Connect via Base URL + API Key'
@@ -437,7 +437,7 @@ export default {
       tempUnschedulable: {
         title: 'Temp Unschedulable',
         statusTitle: 'Temp Unschedulable Status',
-        hint: 'Disable accounts temporarily when error code and keyword both match.',
+        hint: 'When error code and keyword both match, pause the whole account or cool down only the model for the configured duration, per the rule scope.',
         notice: 'Rules are evaluated in order and require both error code and keyword match.',
         addRule: 'Add Rule',
         ruleOrder: 'Rule Order',
@@ -453,6 +453,12 @@ export default {
         keywords: 'Keywords',
         keywordsPlaceholder: 'e.g. overloaded, too many requests',
         keywordsHint: 'Separate keywords with commas; any keyword match will trigger.',
+        scope: 'Scope',
+        scopeModel: 'Model',
+        scopeModelDesc: 'Cool down only the requested model',
+        scopeAccount: 'Account',
+        scopeAccountDesc: 'Pause scheduling for the whole account',
+        scopeHint: 'Model-scoped rules fall back to account scope when the request model cannot be identified.',
         description: 'Description',
         descriptionPlaceholder: 'Optional note for this rule',
         rulesInvalid: 'Add at least one rule with error code, keywords, and duration.',
@@ -611,10 +617,18 @@ export default {
       claudeConsole: 'Claude Console',
       bedrockLabel: 'AWS Bedrock',
       bedrockDesc: 'SigV4 / API Key',
-      vertexLabel: 'Vertex',
+      vertexLabel: 'Agent Platform (Vertex)',
       vertexDesc: 'Service Account',
-      vertexAnthropicHint: 'Use a Google Cloud Service Account JSON to call Anthropic Claude via Vertex AI. It is recommended to configure model mapping to map client Claude model names to Vertex model IDs.',
-      vertexGeminiHint: 'Use a Google Cloud Service Account JSON to access Vertex AI Gemini. It is recommended to place Vertex accounts in a separate group to avoid mixing with AI Studio/Gemini OAuth on the same models.',
+      vertexGeminiDesc: 'Service Account / API Key',
+      vertexAnthropicHint: 'Use a Google Cloud Service Account JSON to call Anthropic Claude via Agent Platform (Vertex). It is recommended to configure model mapping to map client Claude model names to Agent Platform (Vertex) model IDs.',
+      vertexGeminiHint: 'Call Gemini via Agent Platform (Vertex) with a Service Account JSON or an API key. It is recommended to place these accounts in a separate group to avoid mixing with AI Studio/Gemini OAuth on the same models.',
+      vertexAuthMode: 'Authentication',
+      vertexAuthModeServiceAccount: 'Service Account JSON',
+      vertexAuthModeApiKey: 'API Key',
+      vertexApiKeyHint: 'Create it on the Agent Platform API Keys page in the Google Cloud console. Google\'s explicit context caching API does not accept API keys, so these accounts do not serve explicit caching or batch image generation; implicit caching still applies.',
+      vertexApiKeyRequired: 'Please enter an API key',
+      vertexApiKeyProjectIdPlaceholder: 'Optional',
+      vertexApiKeyProjectIdHint: 'Leave empty to use the express mode global endpoint (location is ignored). For a standard API key bound to a service account, enter the Project ID to call the project endpoint with Project ID + Location.',
       vertexSaJsonLabel: 'Service Account JSON',
       vertexSaJsonLoaded: 'Service Account JSON loaded',
       vertexSaJsonDrop: 'Drop Service Account JSON here',
@@ -624,8 +638,8 @@ export default {
       vertexSaJsonUploadHint: 'After uploading or dropping a JSON file, the project_id will be auto-extracted. Key content is only used for account creation.',
       vertexSaJsonEditHint: 'Service Account JSON is not shown on the edit page; to change the JSON, delete the account and recreate it.',
       vertexProjectIdPlaceholder: 'Auto-extracted from JSON',
-      vertexLocationHint: 'Available locations vary by Vertex model. Select the default endpoint location for this account.',
-      vertexLocationRequired: 'Please enter a Vertex location',
+      vertexLocationHint: 'Available locations vary by model. Select the default endpoint location for this account.',
+      vertexLocationRequired: 'Please select a location',
       vertexSaJsonMissingFields: 'Service Account JSON is missing project_id, client_email, or private_key',
       vertexSaJsonMissingProjectId: 'Service Account JSON is missing project_id',
       vertexSaJsonMissingClientEmail: 'Service Account JSON is missing client_email',
@@ -671,6 +685,7 @@ export default {
         wsModeCtxPool: 'Context Pool (ctx_pool)',
         wsModePassthrough: 'Passthrough (passthrough)',
         wsModeHttpBridge: 'HTTP Bridge (http_bridge)',
+        wsModeWsBridge: 'WebSocket Bridge (ws_bridge)',
         wsModeShared: 'Shared (shared)',
         wsModeDedicated: 'Dedicated (dedicated)',
         wsModeCtxPoolHint:
@@ -679,6 +694,8 @@ export default {
           'The gateway opens a separate upstream WS connection for each client session, without using a connection pool.',
         wsModeHttpBridgeHint:
           'The gateway converts client WS requests to upstream HTTP requests, then converts SSE streaming responses back into WS messages.',
+        wsModeWsBridgeHint:
+          'The gateway converts streaming client HTTP requests to upstream WS requests over pooled connections, then converts WS messages back into an SSE stream; WS requests behave the same as the context pool. Non-streaming requests and requests above the HTTP bridge threshold still use HTTP.',
         oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
         oauthResponsesWebsocketsV2Desc:
           'Only applies to OpenAI OAuth. This account can use OpenAI WebSocket Mode only when enabled.',
@@ -884,6 +901,12 @@ export default {
       poolModeRetryStatusCodes: 'Retry Status Codes',
       poolModeRetryStatusCodesHint:
         'Comma-separated HTTP status codes (100-599) that trigger same-account retry in pool mode. Leave blank to use defaults ({default}).',
+      explicitCacheUpstream: 'Upstream Supports Explicit Caching',
+      explicitCacheUpstreamHint: 'Enable only when the upstream is this system with explicit caching support',
+      explicitCacheUpstreamInfo:
+        'When enabled, this account can create Gemini explicit caches (cachedContents). A cache is only used on this account and never fails over. The upstream must route each cache to the account that created it; account-pool gateways or upstreams without explicit caching support will make caches unreliable.',
+      explicitCacheUpstreamMaxTTL: 'Upstream Cache TTL Limit (seconds)',
+      explicitCacheUpstreamMaxTTLHint: 'Maximum TTL allowed by the upstream gateway; requests above it are not sent to this account. Leave blank to use this site\'s limit.',
       customErrorCodes: 'Custom Error Codes',
       customErrorCodesHint: 'Only stop scheduling for selected error codes',
       customErrorCodesWarning:
@@ -1166,20 +1189,6 @@ export default {
         apiKeyHint: 'API Key for the upstream service',
         pleaseEnterBaseUrl: 'Please enter upstream Base URL',
         pleaseEnterApiKey: 'Please enter upstream API Key'
-      },
-      adobe: {
-        cookieLabel: 'Adobe Cookie',
-        cookieHint: 'Sign in to Adobe, open firefly.adobe.com/generate/image and successfully generate an image there, then export JSON with Adobe Cookie Exporter and upload it under Accounts → Import. You can also paste that JSON or the Cookie header from an adobeid-na1.services.adobe.com /ims/check/v6/token request here (it must include ims_sid). Copying document.cookie from firefly.adobe.com alone is not enough. A "Cookie:" prefix or a JSON cookie array is also accepted. The short-lived access token is refreshed from this automatically.',
-        credentialStepTitle: 'Enter credentials',
-        cookiePlaceholder: 'ims_sid=...; aux_sid=...; ...',
-        cookieRequired: 'Please enter the Adobe cookie',
-        accessTokenLabel: 'Access Token (optional)',
-        accessTokenHint: 'Leave empty to have it fetched from the cookie on first refresh. Fill it only when you already hold a valid IMS token.',
-        arpLabel: 'ARP Session (optional)',
-        arpPlaceholder: 'Firefly x-arp-session-id header',
-        arpHint: 'Recommended for FREE accounts. With the exporter, generate an image on firefly.adobe.com/generate/image first, then export. Paid accounts can leave this empty. Pasting the exporter JSON into the cookie field also fills it.',
-        relayApiKeyHint: 'API key for that external upstream (sent as Authorization: Bearer)',
-        relayBaseUrlHint: 'External OpenAI-compatible upstream URL (e.g. https://your-relay.example.com)'
       },
       kiro: {
         apiKeyHint: 'Kiro API Key (starts with ksk_), used as the Bearer token for direct AWS access',
@@ -1526,7 +1535,7 @@ export default {
         modelPassthroughDesc:
           'All model requests are forwarded directly to the Gemini API without model restrictions or mappings.',
         baseUrlHint: 'Leave default for official Gemini API',
-        apiKeyHint: 'Your Gemini API Key (starts with AIza)',
+        apiKeyHint: 'New AI Studio keys start with AQ. (legacy keys start with AIza); for a third-party upstream, use the key it provides',
         tier: {
           label: 'Account Tier',
           hint: 'Tip: The system will try to auto-detect the tier first; if auto-detection is unavailable or fails, your selected tier is used as a fallback (simulated quota).',
@@ -1549,8 +1558,8 @@ export default {
         accountType: {
           oauthTitle: 'OAuth (Gemini)',
           oauthDesc: 'Authorize with your Google account and choose an OAuth type.',
-          apiKeyTitle: 'API Key (AI Studio)',
-          apiKeyDesc: 'Fastest setup. Use an AIza API key.',
+          apiKeyTitle: 'API Key',
+          apiKeyDesc: 'An official AI Studio key, or a Gemini-compatible third-party upstream.',
           apiKeyNote:
             'Best for light testing. Free tier has strict rate limits and data may be used for training.',
           apiKeyLink: 'Get API Key',
@@ -1611,7 +1620,7 @@ export default {
           docs: {
             codeAssist: 'Code Assist Quotas',
             aiStudio: 'AI Studio Pricing',
-            vertex: 'Vertex AI Quotas'
+            vertex: 'Agent Platform (Vertex) Quotas'
           },
           simulatedNote: 'Simulated quota, for reference only',
           rows: {
@@ -1668,7 +1677,6 @@ export default {
       geminiAccount: 'Gemini Account',
       antigravityAccount: 'Antigravity Account',
       grokAccount: 'Grok Account',
-      adobeAccount: 'Adobe Account',
       inputMethod: 'Input Method',
       reAuthorizedSuccess: 'Account re-authorized successfully',
       // Test Modal
@@ -1749,9 +1757,25 @@ export default {
         usageTrend: '30-Day Cost & Request Trend',
         noData: 'No usage data available for this account',
         approxCost: 'approx. {amount}',
-        kiroCredits: 'Credits Used'
+        kiroCredits: 'Credits Used',
+        leonardoCredits: 'Credits Used'
       },
+      leonardo: {
+        cookieLabel: 'Leonardo Cookie',
+        cookieHint: 'Log in to app.leonardo.ai, then copy the full cookie string from DevTools (Application → Cookies or a request Cookie header). Must include __Secure-better-auth.session_token; session_data.* shards are recommended. A bare session token value also works. The short-lived JWT is exchanged and kept alive automatically from this cookie.',
+        cookiePlaceholder: '__Secure-better-auth.session_token=...; __Secure-better-auth.session_data.0=...',
+        cookieRequired: 'Leonardo cookie is required',
+        relayApiKeyHint: "API key for the relay upstream (sent as Authorization: Bearer)",
+        relayBaseUrlHint: 'OpenAI-compatible upstream (official https://api.openai.com or a third-party relay); fallback when native accounts fail'
+      },
+
       usageWindow: {
+        leonardoCredits: 'Credits',
+        leonardoFast: 'Fast Tokens',
+        leonardoFastDaily: 'Fast Tokens (daily)',
+        leonardoRollover: 'Rollover Bank',
+        leonardoTopUp: 'Top-up',
+        leonardoReset: 'Reset',
         statsTitle: '5-Hour Window Usage Statistics',
         statsTitleDaily: 'Daily Usage Statistics',
         geminiProDaily: 'Pro',
@@ -1787,9 +1811,6 @@ export default {
         kiroDaysLeft: '{days}d left',
         kiroExpires: 'Expires',
         kiroReset: 'Reset',
-        adobeCredits: 'Credits',
-        adobeReset: 'Reset',
-        adobePlanCap: 'Plan',
         estimatedTotalCost: 'Est. total ${cost}',
         estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization'
       },

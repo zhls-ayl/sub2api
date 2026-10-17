@@ -189,6 +189,7 @@ func groupFromServiceBase(g *service.Group) Group {
 		ID:                              g.ID,
 		Name:                            g.Name,
 		Description:                     g.Description,
+		I18n:                            g.I18n,
 		Platform:                        g.Platform,
 		RateMultiplier:                  g.RateMultiplier,
 		IsExclusive:                     g.IsExclusive,
@@ -799,9 +800,25 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		BillingTier:             l.BillingTier,
 		AccountRateMultiplier:   l.AccountRateMultiplier,
 		AccountStatsCost:        l.AccountStatsCost,
+		UpstreamCredits:         l.KiroCredits,
+		UpstreamCreditCost:      adminUpstreamCreditCost(l),
 		IPAddress:               l.IPAddress,
 		Account:                 AccountSummaryFromService(l.Account),
 	}
+}
+
+// adminUpstreamCreditCost 按账号当前积分单价估算本次上游成本（展示用，不参与计费）。
+// 没有积分、没有关联账号或未设单价时返回 nil。
+func adminUpstreamCreditCost(l *service.UsageLog) *float64 {
+	if l == nil || l.KiroCredits == nil || *l.KiroCredits <= 0 {
+		return nil
+	}
+	unitPrice := l.Account.CreditUnitPriceUSD()
+	if unitPrice <= 0 {
+		return nil
+	}
+	cost := *l.KiroCredits * unitPrice
+	return &cost
 }
 
 func userFacingReasoningEffort(l *service.UsageLog) *string {

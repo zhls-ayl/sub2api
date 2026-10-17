@@ -29,12 +29,11 @@ Please read the following carefully before using this project:
 
 ## Overview
 
-Sub2API is an AI API gateway platform designed to distribute and manage API quotas from AI product subscriptions. Users can access upstream AI services through platform-generated API Keys, while the platform handles authentication, billing, load balancing, and request forwarding. Adobe Firefly Web cookie accounts can serve OpenAI-compatible image generation — see [Adobe Firefly Support](#adobe-firefly-support).
+Sub2API is an AI API gateway platform designed to distribute and manage API quotas from AI product subscriptions. Users can access upstream AI services through platform-generated API Keys, while the platform handles authentication, billing, load balancing, and request forwarding.
 
 ## Features
 
 - **Multi-Account Management** - Support multiple upstream account types (OAuth, API Key)
-- **Adobe Firefly Images** - OpenAI-compatible image generation and editing from Firefly Web cookie accounts, with optional relay failover ([Adobe Firefly Support](#adobe-firefly-support))
 - **API Key Distribution** - Generate and manage API Keys for users
 - **Precise Billing** - Token-level usage tracking and cost calculation
 - **Smart Scheduling** - Intelligent account selection with sticky sessions
@@ -44,121 +43,6 @@ Sub2API is an AI API gateway platform designed to distribute and manage API quot
 - **Admin Dashboard** - Web interface for monitoring and management
 - **Composite Groups** - Admin routing layer that resolves requested models to concrete providers for multi-provider groups ([Operator Guide](docs/COMPOSITE_GROUPS.md))
 - **External System Integration** - Embed external systems (e.g. ticketing) via iframe to extend the admin dashboard
-
----
-
-## Adobe Firefly Support
-
-Sub2API can serve OpenAI-compatible image generation from Adobe Firefly Web subscription accounts (browser cookies), with optional OpenAI-shaped relay accounts in the same Adobe group for failover.
-
-Direct Firefly calls use **Firefly Web** (`firefly.adobe.com` / `clio-playground-web`), not Adobe Express. Official Adobe Firefly Services API keys are not supported.
-
-### Supported Scope
-
-- Platform name: `adobe`
-- Account types: Firefly cookie accounts (shown as OAuth in the admin UI) and **API Key + Base URL** relay accounts
-- Public image targets: `/v1/images/generations` and `/v1/images/edits`, plus the existing no-prefix aliases, and Gemini-native `POST /v1beta/models/{model}:generateContent` / `streamGenerateContent`
-- The API key's group must allow image generation (Adobe groups default this to on)
-- `n` defaults to 1 and is capped at 10. The cookie path fans out into n Firefly jobs (upstream `n` stays 1) and bills per image; `n>10` is rejected
-- `output_format` follows `png`/`jpeg` with a local transcode (`jpg` is accepted as jpeg). `webp` is not supported. Omit it to keep the upstream format
-- `/v1/models` lists public external names only; do not send internal `firefly-*` family IDs
-- Out of scope for this provider: the video gateway, asynchronous image tasks (`/v1/images/*/async`), official Firefly Services API keys, and non-image protocols such as chat or TTS
-
-### Public Models
-
-| Public model | Notes |
-|--------------|--------|
-| `gpt-image-2` | Firefly GPT Image 2 |
-| `gpt-image-1.5` | Firefly GPT Image 1.5 |
-| `gpt-image-2.5-flare` | Firefly GPT Image 2.5 Flare |
-| `gpt-image-2.5-sunburst` | Firefly GPT Image 2.5 Sunburst (upstream version name is `prism`) |
-| `gemini-2.5-flash-image` / `gemini-3-pro-image` / `gemini-3.1-flash-image` (each also as `*-preview`) | Gemini image models on Firefly (same public names as the Gemini channel) |
-| `flux-pro`, `flux-ultra` | Firefly FLUX |
-| `imagen-4`, `imagen-4-fast` | Firefly Imagen 4 |
-| `gpt-4o-image` | Firefly GPT-4o Image |
-| `runway-gen4-image` | Firefly Runway Gen-4 Image |
-
-Legacy aliases `gpt-image`, `gpt-image-1`, and `gpt-image-1-mini` map to `gpt-image-2` but are not listed by `/v1/models`. Each `gemini-*-image` name is also served under its `-preview` spelling, which maps to the same Firefly model and is listed by `/v1/models` as well.
-
-`gpt-image-*` names are shared with official OpenAI image models. They reach Firefly only when the API key is bound to an **Adobe** group; an OpenAI group still talks to OpenAI. Composite groups do **not** auto-detect `gpt-image-*` (the name is ambiguous) — add an explicit composite route. `gemini-*-image` / `gemini-3-pro-image*` are also shared with the Gemini channel, so composite groups decide by endpoint: `/v1/images/*` goes to Adobe, chat-style endpoints (chat completions, responses, messages) go to Gemini, and `/v1beta` goes to whichever platform in the group can serve the name — if both Gemini/Antigravity and Adobe accounts can, it defaults to Gemini unless an explicit route says otherwise. `flux-*`, `imagen-*`, `runway-gen4*`, and `gpt-4o-image` can be auto-detected as Adobe.
-
-### Cookie Account Setup
-
-1. In the admin dashboard, create an **Adobe** group and add a Firefly cookie account.
-2. Sign in to Adobe in a browser, open `https://firefly.adobe.com/generate/image`, and **successfully generate an image on that page** (needed to capture the optional ARP session header).
-3. Export a Sub2API account JSON with the Chrome/Edge extension in [`tools/adobe-cookie-exporter`](tools/adobe-cookie-exporter) (recommended), then upload it under **Accounts → Import**. Alternatively, in DevTools → Network find a request to `adobeid-na1.services.adobe.com` `/ims/check/v6/token` and copy that request's **Cookie header**. It must include `ims_sid`.
-4. Copying `document.cookie` from `firefly.adobe.com` alone is **not** enough. You can also paste the exporter JSON (or the `cookie` string, a `Cookie:` prefix, or a JSON cookie array) into the Adobe cookie field. The optional `arp_session_id` can be pasted in its own field or taken from the same JSON. Paid accounts can omit ARP; FREE accounts should include it. Import does not bind groups; attach the account afterwards.
-5. The short-lived access token is optional; leave it empty to exchange the cookie on first refresh. Sub2API keeps refreshing the token from the cookie.
-6. Attach the account to the group, then create a Sub2API API key assigned to that group.
-
-When the cookie is no longer valid, re-export it from the browser. The refresher marks the account as error instead of looping forever.
-
-### Relay Accounts (Optional)
-
-The same Adobe group can also hold **API Key + Base URL** relay accounts. Those accounts do not call Firefly; they forward the OpenAI Images payload to `{base_url}` with `Authorization: Bearer`, keeping public model names such as `gpt-image-2` (they are not rewritten to internal `firefly-*` IDs).
-
-Typical uses:
-
-- Failover when a cookie account is out of credits, temporarily unavailable, or not entitled to the requested model/quality
-- `gpt-image-*` edits that include a **mask** prefer relay accounts (Firefly cookie accounts do not implement official OpenAI inpaint-mask semantics)
-- After a Firefly content-safety rejection (for example `image_unsafe`), Sub2API will not try another cookie account, but it may still try a relay account
-
-An Adobe API-key account without `base_url` is not a relay account.
-
-### `size` / `quality` / `background`
-
-| Family | Client `size` | Behavior |
-|--------|---------------|----------|
-| `gpt-image-2` / `gpt-image-2.5-*` | `WxH`, empty, or `auto` | Forward pixels as-is; omit size when empty/`auto` so Firefly auto-chooses |
-| `gpt-image-1.5` | `WxH` | Snap to `1024x1024` / `1536x1024` / `1024x1536` |
-| `gemini-*-image` / `gemini-3-pro-image*` | `WxH`, empty, or `auto` | Map the long edge to a 1K/2K/4K square tier and the nearest `aspectRatio`; empty/`auto` uses Firefly's default 1K square. `gemini-3.1-flash-image` also accepts `1:8`, `1:4`, `4:1`, and `8:1` |
-| `flux-*` / `imagen-4*` / `gpt-4o-image` / `runway-gen4-image` | `WxH` | Snap to that family's allowed size enum |
-
-`quality` maps to Firefly `detailLevel`: `low` (default) → 1, `medium` → 3, `high` → 5, `xhigh`/`max` → 5 on v2/1.5 or 7 on 2.5.
-
-The gpt-image family accepts OpenAI `background` values: `transparent`, `opaque`, and `auto`.
-
-`n` defaults to 1 (max 10). Cookie accounts split it into n Firefly jobs and bill per image. `output_format` of `png` or `jpeg` is applied locally after download; `webp` is rejected; omitting it keeps whatever Firefly returned. `background=transparent` cannot be combined with `output_format=jpeg`.
-
-### Billing, Quota, And Failover
-
-- Billing is per image on `1K` / `2K` / `4K` tiers derived from the output long edge. Group image prices win when set; otherwise Adobe channel fallback prices are used.
-- Cookie accounts surface Firefly Credits on the admin dashboard. Exhausted accounts are temporarily removed from scheduling (about 30 minutes by default) so the next request can use another account.
-- A missing model or quality entitlement fails over to another account; it is not treated as a dead cookie.
-- Upstream `429` / `5xx` / network errors are retryable across accounts.
-
-### Example
-
-```bash
-curl https://your-sub2api.example.com/v1/images/generations \
-  -H "Authorization: Bearer sk-your-sub2api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-image-2",
-    "prompt": "a red panda in a bamboo forest",
-    "size": "1024x1024"
-  }'
-```
-
-The same public model names also accept Gemini-native image generation (the client chooses the protocol; models are not bound to one envelope):
-
-```bash
-curl "https://your-sub2api.example.com/v1beta/models/gemini-3-pro-image:generateContent" \
-  -H "x-goog-api-key: sk-your-sub2api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contents": [{"role": "user", "parts": [{"text": "a red panda in a bamboo forest"}]}],
-    "generationConfig": {
-      "imageConfig": {"aspectRatio": "16:9", "imageSize": "2K"}
-    }
-  }'
-```
-
-`streamGenerateContent` writes **one** SSE frame after generation (`data: {full JSON}\n\n`). It is not token-by-token incremental output and does not send `[DONE]`. Reference images use `parts[].inlineData` (base64) or `fileData.fileUri` (`https://` only).
-
-With `generationConfig.candidateCount` set to n, the response has n candidates (each with an `index`), one image per candidate. Images are returned as `inlineData`; when an API-key relay account only returns an image URL the gateway cannot download, that image is returned as `fileData.fileUri` for the client to fetch. If no image can be delivered at all, the request fails with 502 and is not billed.
-
-`generationConfig.imageConfig.aspectRatio` / `imageSize` (`1K`/`2K`/`4K`) are Gemini-protocol fields; OpenAI Images `size` (`WxH`) is a separate mapping. Banana models on the Gemini path use `aspectRatio`+`imageSize` directly instead of inferring them from WxH; other models and API Key relay accounts receive a `WxH` derived from `aspectRatio`+`imageSize` (long edge = tier edge; ratio-only requests use 1K).
 
 ---
 
@@ -623,6 +507,11 @@ Or set `GATEWAY_OPENAI_WS_MODE_ROUTER_V2_ENABLED=true` in the environment.
 Use `http_bridge` for client-WebSocket/upstream-HTTP operation when rolling out
 or mitigating upstream WebSocket issues.
 
+Use `ws_bridge` to send streaming HTTP `/v1/responses` requests upstream over
+pooled WebSocket connections as well. WebSocket clients behave exactly as in
+`ctx_pool`. Non-streaming requests, `/responses/*` subpaths (including compact),
+and first payloads above `http_bridge_threshold_bytes` stay on upstream HTTP.
+
 #### Force OpenAI upstream HTTP/SSE
 
 When an egress proxy or network repeatedly reconnects OpenAI Responses
@@ -712,7 +601,7 @@ Simple Mode is designed for individual developers or internal teams who want qui
 
 ## Asynchronous Image Tasks
 
-Long-running OpenAI/Grok image generation and editing can be submitted through `/v1/images/generations/async` or `/v1/images/edits/async`, then polled at `/v1/images/tasks/{task_id}` without holding a CDN connection open. Adobe Firefly groups are synchronous-only on `/v1/images/generations` and `/v1/images/edits`. See [Asynchronous Image Tasks](docs/ASYNC_IMAGE_TASKS.md) for request and response examples.
+Long-running OpenAI/Grok image generation and editing can be submitted through `/v1/images/generations/async` or `/v1/images/edits/async`, then polled at `/v1/images/tasks/{task_id}` without holding a CDN connection open. See [Asynchronous Image Tasks](docs/ASYNC_IMAGE_TASKS.md) for request and response examples.
 
 ---
 

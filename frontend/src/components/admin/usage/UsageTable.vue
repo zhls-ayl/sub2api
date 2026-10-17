@@ -147,12 +147,25 @@
 
         <template #cell-tokens="{ row }">
           <!-- 图片生成请求（仅按次计费时显示图片格式） -->
-          <div v-if="isImageUsage(row)" class="flex items-center gap-1.5">
-            <svg class="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            <span class="font-medium text-gray-900 dark:text-white">{{ row.image_count }}{{ t('usage.imageUnit') }}</span>
-            <span class="text-gray-400">({{ formatImageBillingSize(row, t) }})</span>
+          <div v-if="isImageUsage(row)" class="space-y-1 text-sm">
+            <div class="flex items-center gap-1.5">
+              <svg class="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span class="font-medium text-gray-900 dark:text-white">{{ row.image_count }}{{ t('usage.imageUnit') }}</span>
+              <span class="text-gray-400">({{ formatImageBillingSize(row, t) }})</span>
+            </div>
+            <!-- 按张计费但上游（或估算）带了 token 用量时一并显示，如 Leonardo 的积分估算 -->
+            <div v-if="(row.input_tokens ?? 0) > 0 || (row.output_tokens ?? 0) > 0" class="flex items-center gap-2" data-testid="image-usage-tokens">
+              <div class="inline-flex items-center gap-1">
+                <Icon name="arrowDown" size="sm" class="h-3.5 w-3.5 text-emerald-500" />
+                <span class="font-medium text-gray-900 dark:text-white">{{ row.input_tokens?.toLocaleString() || 0 }}</span>
+              </div>
+              <div class="inline-flex items-center gap-1">
+                <Icon name="arrowUp" size="sm" class="h-3.5 w-3.5 text-violet-500" />
+                <span class="font-medium text-gray-900 dark:text-white">{{ row.output_tokens?.toLocaleString() || 0 }}</span>
+              </div>
+            </div>
           </div>
           <!-- Token 请求 -->
           <div v-else class="flex items-center gap-1.5">
@@ -526,6 +539,16 @@
                 }).toFixed(8) }}
               </span>
             </div>
+            <!-- 本次消耗的上游积分（Kiro / Leonardo）及按账号单价估算的成本 -->
+            <div v-if="(tooltipData?.upstream_credits ?? 0) > 0" class="flex items-center justify-between gap-6" data-testid="usage-upstream-credits">
+              <span class="text-gray-400">{{ t('usage.upstreamCredits') }}</span>
+              <span class="font-semibold text-amber-300">
+                {{ formatUpstreamCredits(tooltipData?.upstream_credits) }}
+                <span v-if="(tooltipData?.upstream_credit_cost ?? 0) > 0" class="font-medium text-gray-300">
+                  ({{ t('usage.upstreamCreditCostApprox', { amount: '$' + (tooltipData?.upstream_credit_cost ?? 0).toFixed(6) }) }})
+                </span>
+              </span>
+            </div>
           </template>
         </div>
         <div class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"></div>
@@ -621,6 +644,10 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const copiedRequestId = ref<string | null>(null)
 const showAccountBilling = props.showAccountBilling
+
+// 上游积分最多保留 2 位小数（Kiro credits 有小数，Leonardo 积分为整数）。
+const formatUpstreamCredits = (value: number | null | undefined): string =>
+  Number(value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })
 const showUpstreamEndpoint = props.showUpstreamEndpoint
 const ipGeoBatchLoading = ref(false)
 

@@ -29,7 +29,7 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string, params?: Record<string, string>) => key === 'common.copy' ? '复制' : key === 'admin.accounts.modelMappingConflict' ? `Model mapping conflict: ${params?.from} → ${params?.to}` : key
+      t: (key: string, params?: Record<string, string>) => key === 'common.copy' ? '复制' : key === 'admin.accounts.modelMappingConflict' ? `Model mapping conflict: ${params?.from} → ${params?.to}` : key === 'admin.accounts.syncUpstreamModelsError' ? `${key}: ${params?.message}` : key
     })
   }
 })
@@ -244,6 +244,26 @@ describe('ModelWhitelistSelector', () => {
     expect(showSuccess).not.toHaveBeenCalled()
   })
 
+  it('shows the backend message when upstream sync is rejected', async () => {
+    syncUpstreamModels.mockRejectedValue({
+      status: 400,
+      code: 'BAD_REQUEST',
+      message: 'Vertex API key accounts do not support upstream model listing'
+    })
+    const wrapper = mountSelector({ platform: 'gemini', accountId: 174 })
+
+    const syncButton = wrapper
+      .findAll('button')
+      .find(button => button.text() === 'admin.accounts.syncUpstreamModels')
+    expect(syncButton).toBeDefined()
+    await syncButton!.trigger('click')
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalledWith(
+      'admin.accounts.syncUpstreamModelsError: Vertex API key accounts do not support upstream model listing'
+    )
+  })
+
   it('shows success and a partial warning when some capabilities were saved', async () => {
     syncUpstreamModels.mockResolvedValue({
       models: ['gpt-6-astra', 'gpt-image-2'],
@@ -329,21 +349,4 @@ describe('ModelWhitelistSelector', () => {
     expect(syncButton?.exists()).toBe(true)
   })
 
-  it('shows the upstream sync button only for Adobe API key relay accounts', () => {
-    const findSyncButton = (wrapper: ReturnType<typeof mountSelector>) => wrapper
-      .findAll('button')
-      .find(button => button.text() === 'admin.accounts.syncUpstreamModels')
-
-    expect(findSyncButton(mountSelector({
-      platform: 'adobe',
-      syncCredentials: {
-        platform: 'adobe',
-        type: 'apikey',
-        base_url: 'https://relay.example.com',
-        api_key: 'sk-test',
-      },
-    }))).toBeDefined()
-    expect(findSyncButton(mountSelector({ platform: 'adobe', accountId: 1, accountType: 'apikey' }))).toBeDefined()
-    expect(findSyncButton(mountSelector({ platform: 'adobe', accountId: 1, accountType: 'oauth' }))).toBeUndefined()
-  })
 })

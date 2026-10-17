@@ -21,9 +21,7 @@
                       ? 'from-purple-500 to-purple-600'
                       : isGrok
                         ? 'from-zinc-700 to-zinc-900'
-                        : isAdobe
-                          ? 'from-adobe-500 to-adobe-600'
-                          : 'from-orange-500 to-orange-600'
+                        : 'from-orange-500 to-orange-600'
             ]"
           >
             <Icon name="sparkles" size="md" class="text-white" />
@@ -42,9 +40,7 @@
                         ? t('admin.accounts.antigravityAccount')
                         : isGrok
                           ? t('admin.accounts.grokAccount')
-                          : isAdobe
-                            ? t('admin.accounts.adobeAccount')
-                            : t('admin.accounts.claudeCodeAccount')
+                          : t('admin.accounts.claudeCodeAccount')
               }}
             </span>
           </div>
@@ -345,47 +341,23 @@
         </div>
       </div>
 
-      <div v-if="isAdobe" class="space-y-4">
+      <!-- Leonardo：重新导出浏览器 cookie 即完成重登。 -->
+      <div v-if="isLeonardo" class="space-y-4">
         <div>
-          <label class="input-label">{{ t('admin.accounts.adobe.cookieLabel') }}</label>
+          <label class="input-label">{{ t('admin.accounts.leonardo.cookieLabel') }}</label>
           <textarea
-            v-model="adobeCookie"
-            rows="4"
+            v-model="leonardoCookie"
+            rows="6"
             class="input font-mono text-xs"
-            :placeholder="t('admin.accounts.adobe.cookiePlaceholder')"
-            :disabled="adobeSubmitting"
-            data-testid="reauth-adobe-cookie-input"
+            :placeholder="t('admin.accounts.leonardo.cookiePlaceholder')"
+            data-testid="reauth-leonardo-cookie-input"
           ></textarea>
-          <p class="input-hint">{{ t('admin.accounts.adobe.cookieHint') }}</p>
-        </div>
-        <div>
-          <label class="input-label">{{ t('admin.accounts.adobe.accessTokenLabel') }}</label>
-          <input
-            v-model="adobeAccessToken"
-            type="password"
-            class="input font-mono"
-            autocomplete="off"
-            :disabled="adobeSubmitting"
-            data-testid="reauth-adobe-access-token-input"
-          />
-          <p class="input-hint">{{ t('admin.accounts.adobe.accessTokenHint') }}</p>
-        </div>
-        <div>
-          <label class="input-label">{{ t('admin.accounts.adobe.arpLabel') }}</label>
-          <textarea
-            v-model="adobeArpSession"
-            rows="3"
-            class="input font-mono text-xs"
-            :placeholder="t('admin.accounts.adobe.arpPlaceholder')"
-            :disabled="adobeSubmitting"
-            data-testid="reauth-adobe-arp-input"
-          ></textarea>
-          <p class="input-hint">{{ t('admin.accounts.adobe.arpHint') }}</p>
+          <p class="input-hint">{{ t('admin.accounts.leonardo.cookieHint') }}</p>
         </div>
       </div>
 
       <OAuthAuthorizationFlow
-        v-if="!isKiroImportMode && !isAdobe"
+        v-if="!isKiroImportMode && !isLeonardo"
         ref="oauthFlowRef"
         :add-method="addMethod"
         :auth-url="currentAuthUrl"
@@ -418,14 +390,14 @@
           {{ t('common.cancel') }}
         </button>
         <button
-          v-if="isAdobe"
+          v-if="isLeonardo"
           type="button"
-          :disabled="adobeSubmitting"
+          :disabled="!leonardoCookie.trim()"
           class="btn btn-primary"
-          data-testid="reauth-adobe-submit"
-          @click="handleAdobeReauth"
+          data-testid="reauth-leonardo-submit"
+          @click="handleLeonardoReAuth"
         >
-          {{ adobeSubmitting ? t('admin.accounts.oauth.verifying') : t('admin.accounts.reAuthorize') }}
+          {{ t('common.confirm') }}
         </button>
         <button
           v-else-if="isKiroImportMode"
@@ -497,7 +469,6 @@ import { useAppStore } from '@/stores/app'
 import type { Account, AccountPlatform } from '@/types'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
 import { KIRO_REGION_SELECT_OPTIONS } from '@/constants/kiroRegions'
-import { extractAdobeAccessTokenFromCookieInput, extractAdobeAccessTokenInput, extractAdobeArpFromCookieInput, extractAdobeArpSessionInput, extractAdobeCookieInput } from '@/utils/adobeAccount'
 
 interface OAuthFlowExposed {
   authCode: string
@@ -541,21 +512,6 @@ const kiroIDCStartUrl = ref('https://view.awsapps.com/start')
 const kiroIDCRegion = ref('us-east-1')
 const kiroTokenJson = ref('')
 const kiroDeviceRegistrationJson = ref('')
-const adobeCookie = ref('')
-const adobeAccessToken = ref('')
-const adobeArpSession = ref('')
-const adobeSubmitting = ref(false)
-
-watch(adobeCookie, (value) => {
-  if (!adobeArpSession.value.trim()) {
-    const arp = extractAdobeArpFromCookieInput(value)
-    if (arp) adobeArpSession.value = arp
-  }
-  if (!adobeAccessToken.value.trim()) {
-    const token = extractAdobeAccessTokenFromCookieInput(value)
-    if (token) adobeAccessToken.value = token
-  }
-})
 // 「从 Kiro IDE 导入」账号来源:决定字段显隐/必填/示例,并与 token JSON 内 provider 做一致性校验。
 const kiroImportProvider = ref<'Google' | 'Github' | 'BuilderId' | 'Enterprise' | 'ExternalIdp'>('Google')
 const kiroImportProviderOptions = ['Google', 'Github', 'BuilderId', 'Enterprise', 'ExternalIdp'] as const
@@ -572,14 +528,16 @@ const kiroImportTokenPlaceholder = computed(() => {
     : '{"accessToken":"...","refreshToken":"...","authMethod":"social","provider":"' + kiroImportProvider.value + '"}'
 })
 
+const leonardoCookie = ref('')
+
 const isOpenAI = computed(() => props.account?.platform === 'openai')
 const isOpenAILike = computed(() => isOpenAI.value)
 const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
 const isKiro = computed(() => props.account?.platform === 'kiro')
+const isLeonardo = computed(() => props.account?.platform === 'leonardo' && props.account?.type === 'oauth')
 const isGrok = computed(() => props.account?.platform === 'grok')
-const isAdobe = computed(() => props.account?.platform === 'adobe')
 
 const oauthPlatform = computed<AccountPlatform>(() => {
   if (isOpenAI.value) return 'openai'
@@ -587,7 +545,6 @@ const oauthPlatform = computed<AccountPlatform>(() => {
   if (isKiro.value) return 'kiro'
   if (isAntigravity.value) return 'antigravity'
   if (isGrok.value) return 'grok'
-  if (isAdobe.value) return 'adobe'
   return 'anthropic'
 })
 
@@ -740,10 +697,6 @@ const resetState = () => {
   kiroTokenJson.value = ''
   kiroDeviceRegistrationJson.value = ''
   kiroImportProvider.value = 'Google'
-  adobeCookie.value = ''
-  adobeAccessToken.value = ''
-  adobeArpSession.value = ''
-  adobeSubmitting.value = false
   claudeOAuth.resetState()
   openaiOAuth.resetState()
   geminiOAuth.resetState()
@@ -805,46 +758,19 @@ const updateAccountCredentials = async (payload: {
   handleClose()
 }
 
-const handleAdobeReauth = async () => {
-  if (!props.account) return
-  const cookie = extractAdobeCookieInput(adobeCookie.value)
-  if (!cookie) {
-    appStore.showError(t('admin.accounts.adobe.cookieRequired'))
-    return
-  }
-
-  adobeSubmitting.value = true
-  try {
-    const next: Record<string, unknown> = {
-      cookie,
-      // Empty string must be sent: omitting the key would keep the old IMS token.
-      access_token: extractAdobeAccessTokenInput(adobeAccessToken.value)
-        || extractAdobeAccessTokenFromCookieInput(adobeCookie.value)
-    }
-    const arp = extractAdobeArpSessionInput(adobeArpSession.value)
-      || extractAdobeArpFromCookieInput(adobeCookie.value)
-    if (arp) {
-      next.arp_session_id = arp
-    }
-    await updateAccountCredentials({
-      type: 'oauth',
-      credentials: buildUpdatedCredentials(next)
-    })
-  } catch (error: any) {
-    appStore.showError(
-      error?.response?.data?.detail ||
-        error?.response?.data?.message ||
-        error?.message ||
-        t('admin.accounts.oauth.authFailed')
-    )
-  } finally {
-    adobeSubmitting.value = false
-  }
+const handleLeonardoReAuth = async () => {
+  const cookie = leonardoCookie.value.trim()
+  if (!cookie) return
+  await updateAccountCredentials({
+    type: 'oauth',
+    // 只换 cookie；旧 JWT/access_token 留给后台刷新器按新 cookie 重换，
+    // 这里清掉可避免「新 cookie + 旧 token」的短暂混用。
+    credentials: buildUpdatedCredentials({ cookie, access_token: '', expires_at: '' })
+  })
 }
 
 const handleGenerateUrl = async () => {
   if (!props.account) return
-  if (isAdobe.value) return
 
   if (isOpenAILike.value) {
     await openaiOAuth.generateAuthUrl(props.account.proxy_id)

@@ -46,6 +46,7 @@ export const claudeModels = [
   'claude-opus-5-5',
   'claude-opus-5',
   'claude-sonnet-5-5',
+  'claude-haiku-5-5',
   'claude-sonnet-5',
   'claude-sonnet-4-6-thinking',
   'claude-sonnet-4-6',
@@ -65,15 +66,22 @@ const geminiModels = [
   'gemini-2.5-pro',
   'gemini-3.5-flash',
   'gemini-3-flash-preview',
-  'gemini-3-pro-preview'
+  'gemini-3-pro-preview',
+  'gemini-4-argon'
 ]
 
 // Antigravity 官方支持的模型（精确匹配）
 // 基于官方 API 返回的模型列表，只支持 Claude 4.5+ 和 Gemini 2.5+
 const antigravityModels = [
-  // Claude 4.5+ 系列
+  // Claude 4.5+ / 5.5 系列
   'claude-fable-5-1',
   'claude-fable-5',
+  'claude-opus-5-5-high',
+  'claude-opus-5-5-medium',
+  'claude-opus-5-5-low',
+  'claude-sonnet-5-5-high',
+  'claude-sonnet-5-5-medium',
+  'claude-sonnet-5-5-low',
   'claude-opus-4-6',
   'claude-opus-4-6-thinking',
   'claude-opus-4-7',
@@ -97,37 +105,46 @@ const antigravityModels = [
   'gemini-3.1-pro',
   'gemini-3.1-pro-high',
   'gemini-3.1-pro-low',
+  'gemini-pro-agent',
   'gemini-3-pro-image',
+  // Gemini 3.6 / 3.7 / 3.8 Flash 系列
+  'gemini-3.6-flash',
+  'gemini-3.6-flash-low',
+  'gemini-3.6-flash-medium',
+  'gemini-3.6-flash-high',
+  'gemini-3.6-flash-tiered',
+  'gemini-3.7-flash',
+  'gemini-3.7-flash-low',
+  'gemini-3.7-flash-medium',
+  'gemini-3.7-flash-high',
+  'gemini-3.7-flash-tiered',
+  'gemini-3.8-flash',
+  'gemini-3.8-flash-low',
+  'gemini-3.8-flash-medium',
+  'gemini-3.8-flash-high',
+  'gemini-3.8-flash-tiered',
+  // Gemini 4 Argon 系列
+  'gemini-4-argon-low',
+  'gemini-4-argon-medium',
+  'gemini-4-argon-high',
   // 其他
   'gpt-oss-120b-medium',
   'tab_flash_lite_preview'
 ]
 
-// Adobe Firefly 图像模型（族级 id，与后端 internal/pkg/adobe 的
-// ImageFamilyModelIDs 保持一致）。分辨率与宽高比由请求的 size 推导，
-// 故这里不列 5×3×N 的全组合。
-// Step 8：干净外部名。与后端 adobe.ImageModelIDs() 一致。
-// 内部族 id（firefly-*）是路由用的，用户面看不到。
-const adobeModels = [
+// Leonardo 平台对外模型：Cookie 原生号与 API Key 中转号同一口径（后端
+// IsModelSupported 强制，映射目标不在此列表的条目不参与调度）。
+const leonardoModels = [
   'gpt-image-2',
-  'gpt-image-1.5',
-  // sunburst 是 UI 展示名；后端把它映到上游 modelVersion=gpt-image-2.5-prism。
   'gpt-image-2.5-flare',
   'gpt-image-2.5-sunburst',
-  // preview 名与非 preview 名落同一个 Firefly 族，后端默认映射里都在，
-  // 所以白名单同步也要给出来，否则勾了白名单的账号会把它们挡在门外。
-  'gemini-3-pro-image',
-  'gemini-3-pro-image-preview',
-  'gemini-2.5-flash-image',
-  'gemini-2.5-flash-image-preview',
-  'gemini-3.1-flash-image',
-  'gemini-3.1-flash-image-preview',
-  'flux-pro',
-  'flux-ultra',
-  'imagen-4',
-  'imagen-4-fast',
-  'gpt-4o-image',
-  'runway-gen4-image'
+]
+
+// Leonardo 预设映射：恒等（Cookie 号出图时后端再换成上游 slug，如 openai/gpt-image-2.5-flare）。
+const leonardoPresetMappings = [
+  { label: 'GPT Image 2', from: 'gpt-image-2', to: 'gpt-image-2', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'GPT Image 2.5 Flare', from: 'gpt-image-2.5-flare', to: 'gpt-image-2.5-flare', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: 'GPT Image 2.5 Sunburst', from: 'gpt-image-2.5-sunburst', to: 'gpt-image-2.5-sunburst', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
 ]
 
 const kiroModels = [
@@ -364,6 +381,7 @@ const anthropicPresetMappings = [
   { label: 'Opus 5', from: 'claude-opus-5', to: 'claude-opus-5', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
   { label: 'Haiku 3.5', from: 'claude-3-5-haiku-20241022', to: 'claude-3-5-haiku-20241022', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
   { label: 'Haiku 4.5', from: 'claude-haiku-4-5-20251001', to: 'claude-haiku-4-5-20251001', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: 'Haiku 5.5', from: 'claude-haiku-5-5', to: 'claude-haiku-5-5', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
   { label: 'Opus->Sonnet', from: 'claude-opus-4-6', to: 'claude-sonnet-4-5-20250929', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' }
 ]
 
@@ -420,7 +438,22 @@ const grokPresetMappings = [
 
 // Antigravity 预设映射（支持通配符）
 const antigravityPresetMappings = [
+  // Claude 5.5 / Gemini 4 Argon / 3.8 Flash 推荐映射
+  { label: '4 Argon→High', from: 'gemini-4-argon', to: 'gemini-4-argon-high', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
+  { label: '4 Argon High', from: 'gemini-4-argon-high', to: 'gemini-4-argon-high', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: '4 Argon Medium', from: 'gemini-4-argon-medium', to: 'gemini-4-argon-medium', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
+  { label: '4 Argon Low', from: 'gemini-4-argon-low', to: 'gemini-4-argon-low', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
+  { label: '3.8 Flash', from: 'gemini-3.8-flash', to: 'gemini-3.8-flash', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: '3.8 Flash High', from: 'gemini-3.8-flash-high', to: 'gemini-3.8-flash-high', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
+  { label: 'Opus 5.5→High', from: 'claude-opus-5-5', to: 'claude-opus-5-5-high', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 5.5 High', from: 'claude-opus-5-5-high', to: 'claude-opus-5-5-high', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 5.5 Medium', from: 'claude-opus-5-5-medium', to: 'claude-opus-5-5-medium', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Sonnet 5.5→High', from: 'claude-sonnet-5-5', to: 'claude-sonnet-5-5-high', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Sonnet 5.5 High', from: 'claude-sonnet-5-5-high', to: 'claude-sonnet-5-5-high', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Sonnet 5.5 Medium', from: 'claude-sonnet-5-5-medium', to: 'claude-sonnet-5-5-medium', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
   // Claude 通配符映射
+  { label: 'Claude→Sonnet 5.5', from: 'claude-*', to: 'claude-sonnet-5-5-high', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
+  { label: 'Opus→Opus 5.5', from: 'claude-opus-*', to: 'claude-opus-5-5-high', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
   { label: 'Claude→Sonnet', from: 'claude-*', to: 'claude-sonnet-4-5', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
   { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'claude-fable-5-1', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
@@ -431,7 +464,8 @@ const antigravityPresetMappings = [
   { label: 'Sonnet4.5→4.6', from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4-6', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
   { label: 'Sonnet3.5→4.6', from: 'claude-3-5-sonnet-20241022', to: 'claude-sonnet-4-6', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
   { label: 'Opus4.5→4.6', from: 'claude-opus-4-5-20251101', to: 'claude-opus-4-6-thinking', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
-  // Gemini 3→3.1 映射
+  // Gemini 3→3.1 / 4 Argon 映射
+  { label: '3.1-Pro→4-Argon-High', from: 'gemini-3.1-pro*', to: 'gemini-4-argon-high', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   { label: '3-Pro-Preview→Pro-Agent', from: 'gemini-3-pro-preview', to: 'gemini-pro-agent', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   { label: '3-Pro-High→Pro-Agent', from: 'gemini-3-pro-high', to: 'gemini-pro-agent', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: '3-Pro-Low→3.1-Pro-Low', from: 'gemini-3-pro-low', to: 'gemini-3.1-pro-low', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
@@ -441,6 +475,7 @@ const antigravityPresetMappings = [
   { label: '3.1-Pro-Low透传', from: 'gemini-3.1-pro-low', to: 'gemini-3.1-pro-low', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
   { label: '3.1-Pro-Preview→Pro-Agent', from: 'gemini-3.1-pro-preview', to: 'gemini-pro-agent', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   // Gemini 通配符映射
+  { label: 'Gemini 3→3.8 Flash', from: 'gemini-3*', to: 'gemini-3.8-flash-high', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
   { label: 'Gemini 3→Flash', from: 'gemini-3*', to: 'gemini-3-flash', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
   { label: 'Gemini 2.5→Flash', from: 'gemini-2.5*', to: 'gemini-2.5-flash', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: '2.5-Flash-Image透传', from: 'gemini-2.5-flash-image', to: 'gemini-2.5-flash-image', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
@@ -455,36 +490,6 @@ const antigravityPresetMappings = [
   { label: 'Opus 4.6-thinking', from: 'claude-opus-4-6-thinking', to: 'claude-opus-4-6-thinking', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
   { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'claude-opus-4-7', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
   { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4-8', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' }
-]
-
-// Adobe 预设映射（与后端 domain.DefaultAdobeModelMapping 保持一致）。
-// Step 8：清除所有 firefly-* 左侧的直通条目——用户面永远看不到内部族 id。
-const adobePresetMappings = [
-  { label: 'GPT Image 2', from: 'gpt-image-2', to: 'firefly-gpt-image-2', color: 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300' },
-  { label: 'GPT Image 1.5', from: 'gpt-image-1.5', to: 'firefly-gpt-image-1.5', color: 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300' },
-  // sunburst 是 UI 展示名（对应上游 modelVersion=gpt-image-2.5-prism）。
-  { label: 'GPT Image 2.5 Sunburst', from: 'gpt-image-2.5-sunburst', to: 'firefly-gpt-image-2-5-prism', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
-  { label: 'GPT Image 2.5 Prism', from: 'gpt-image-2.5-prism', to: 'firefly-gpt-image-2-5-prism', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
-  { label: 'GPT Image 2.5 Flare', from: 'gpt-image-2.5-flare', to: 'firefly-gpt-image-2-5-flare', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
-  // 更早的 gpt-image 名字：Adobe 侧没有对应版本，一律落 2（与后端默认表一致）
-  { label: 'GPT Image', from: 'gpt-image', to: 'firefly-gpt-image-2', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
-  { label: 'GPT Image 1', from: 'gpt-image-1', to: 'firefly-gpt-image-2', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
-  { label: 'GPT Image 1 Mini', from: 'gpt-image-1-mini', to: 'firefly-gpt-image-2', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300' },
-  { label: 'Gemini 3 Pro Image', from: 'gemini-3-pro-image', to: 'firefly-nano-banana-pro', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' },
-  { label: 'Gemini 3 Pro Image preview', from: 'gemini-3-pro-image-preview', to: 'firefly-nano-banana-pro', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' },
-  { label: 'Gemini 2.5 Flash Image', from: 'gemini-2.5-flash-image', to: 'firefly-nano-banana', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' },
-  { label: 'Gemini 2.5 Flash Image preview', from: 'gemini-2.5-flash-image-preview', to: 'firefly-nano-banana', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' },
-  { label: 'Gemini 3.1 Flash Image', from: 'gemini-3.1-flash-image', to: 'firefly-nano-banana2', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' },
-  { label: 'Gemini 3.1 Flash Image preview', from: 'gemini-3.1-flash-image-preview', to: 'firefly-nano-banana2', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300' },
-  { label: 'nano-banana-pro (compat)', from: 'nano-banana-pro', to: 'firefly-nano-banana-pro', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300' },
-  { label: 'nano-banana2 (compat)', from: 'nano-banana2', to: 'firefly-nano-banana2', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300' },
-  { label: 'nano-banana (compat)', from: 'nano-banana', to: 'firefly-nano-banana', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300' },
-  { label: 'FLUX Pro', from: 'flux-pro', to: 'firefly-flux-pro', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' },
-  { label: 'FLUX Ultra', from: 'flux-ultra', to: 'firefly-flux-ultra', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' },
-  { label: 'Imagen 4', from: 'imagen-4', to: 'firefly-imagen-4', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' },
-  { label: 'Imagen 4 Fast', from: 'imagen-4-fast', to: 'firefly-imagen-4-fast', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' },
-  { label: 'GPT-4o Image', from: 'gpt-4o-image', to: 'firefly-gpt-4o-image', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-900/30 dark:text-slate-300' },
-  { label: 'Runway Gen-4', from: 'runway-gen4-image', to: 'firefly-runway-gen4-image', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-300' }
 ]
 
 const kiroPresetMappings = [
@@ -590,7 +595,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'gemini': return geminiModels
     case 'antigravity': return antigravityModels
     case 'kiro': return kiroModels
-    case 'adobe': return adobeModels
+    case 'leonardo': return leonardoModels
     case 'zhipu': return zhipuModels
     case 'qwen': return qwenModels
     case 'deepseek': return deepseekModels
@@ -635,7 +640,7 @@ export function getPresetMappingsByPlatform(platform: string) {
   if (platform === 'grok' || platform === 'xai') return grokPresetMappings
   if (platform === 'antigravity') return antigravityPresetMappings
   if (platform === 'kiro') return kiroPresetMappings
-  if (platform === 'adobe') return adobePresetMappings
+  if (platform === 'leonardo') return leonardoPresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings
   return anthropicPresetMappings
 }

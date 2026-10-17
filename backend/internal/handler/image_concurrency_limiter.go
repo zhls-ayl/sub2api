@@ -10,7 +10,7 @@ import (
 )
 
 // sharedImageConcurrencyLimiter 是进程内唯一的出图并发限流器。
-// OpenAI/Grok 出图（OpenAIGatewayHandler）与 Adobe 出图（GatewayHandler）共用它，
+// OpenAI/Grok 出图（OpenAIGatewayHandler）共用它，
 // 使 gateway.image_concurrency 的上限对所有出图入口整体生效。
 var sharedImageConcurrencyLimiter = &imageConcurrencyLimiter{}
 

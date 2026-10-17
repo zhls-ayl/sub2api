@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/url"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -138,11 +139,20 @@ func isOpenAIPersonalAccessTokenAuthMode(value string) bool {
 	}
 }
 
+// TempUnschedulableRule.Scope 的取值：命中后隔离的粒度。
+const (
+	TempUnschedScopeAccount = "account"
+	TempUnschedScopeModel   = "model"
+)
+
 type TempUnschedulableRule struct {
 	ErrorCode       int      `json:"error_code"`
 	Keywords        []string `json:"keywords"`
 	DurationMinutes int      `json:"duration_minutes"`
 	Description     string   `json:"description"`
+	// Scope 决定命中后的隔离粒度：account 暂停整个账号，model 只冷却本次请求的模型。
+	// 为空时模型已知且非 401 走模型级，否则账号级。
+	Scope string `json:"scope,omitempty"`
 }
 
 func (a *Account) IsActive() bool {
@@ -352,6 +362,13 @@ func (a *Account) IsGeminiGoogleOne() bool {
 	return a.Platform == PlatformGemini && a.Type == AccountTypeOAuth && a.GeminiOAuthType() == "google_one"
 }
 
+// IsGeminiThirdPartyAPIKey reports whether a Gemini API Key account points at a
+// non-Google base URL. Such upstreams carry no AI Studio tier or daily quota.
+func (a *Account) IsGeminiThirdPartyAPIKey() bool {
+	return a != nil && a.Platform == PlatformGemini && a.Type == AccountTypeAPIKey &&
+		!isOfficialGeminiAPIBaseURL(a.GetCredential("base_url"))
+}
+
 func (a *Account) CanGetUsage() bool {
 	return a.Type == AccountTypeOAuth
 }
@@ -473,6 +490,7 @@ func (a *Account) GetTempUnschedulableRules() []TempUnschedulableRule {
 			Keywords:        parseTempUnschedStrings(entry["keywords"]),
 			DurationMinutes: parseTempUnschedInt(entry["duration_minutes"]),
 			Description:     parseTempUnschedString(entry["description"]),
+			Scope:           normalizeTempUnschedScope(entry["scope"]),
 		}
 
 		if rule.ErrorCode <= 0 || rule.DurationMinutes <= 0 || len(rule.Keywords) == 0 {
@@ -483,6 +501,18 @@ func (a *Account) GetTempUnschedulableRules() []TempUnschedulableRule {
 	}
 
 	return rules
+}
+
+// normalizeTempUnschedScope 只认 account / model 两个值，其余一律视为未设置。
+func normalizeTempUnschedScope(raw any) string {
+	switch strings.ToLower(strings.TrimSpace(parseTempUnschedString(raw))) {
+	case TempUnschedScopeAccount:
+		return TempUnschedScopeAccount
+	case TempUnschedScopeModel:
+		return TempUnschedScopeModel
+	default:
+		return ""
+	}
 }
 
 func parseTempUnschedString(value any) string {
@@ -644,7 +674,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	if a.Credentials == nil {
 		// 部分平台在未显式配置 model_mapping 时仍应使用默认映射，
 		// 以限制可调度/可转发的模型集合。
-		if defaults := defaultModelMappingForAccount(a); defaults != nil {
+		if defaults := defaultModelMappingForPlatform(a.Platform); defaults != nil {
 			return defaults
 		}
 		if a.Platform == domain.PlatformGrok {
@@ -658,7 +688,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		if a.IsGeminiGoogleOne() {
 			return geminicli.GoogleOneModelMapping()
 		}
-		if defaults := defaultModelMappingForAccount(a); defaults != nil {
+		if defaults := defaultModelMappingForPlatform(a.Platform); defaults != nil {
 			return defaults
 		}
 		if a.Platform == domain.PlatformGrok {
@@ -675,26 +705,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	}
 	if len(result) > 0 {
 		if a.Platform == domain.PlatformAntigravity {
-			ensureAntigravityDefaultPassthroughs(result, []string{
-				"gemini-3-flash",
-				"gemini-3.1-pro-high",
-				"gemini-3.1-pro-low",
-				"gemini-3.6-flash",
-				"gemini-3.6-flash-high",
-				"gemini-3.6-flash-low",
-				"gemini-3.6-flash-medium",
-				"gemini-3.6-flash-tiered",
-				"gemini-3.7-flash",
-				"gemini-3.7-flash-high",
-				"gemini-3.7-flash-low",
-				"gemini-3.7-flash-medium",
-				"gemini-3.7-flash-tiered",
-				"gemini-3.8-flash",
-				"gemini-3.8-flash-high",
-				"gemini-3.8-flash-low",
-				"gemini-3.8-flash-medium",
-				"gemini-3.8-flash-tiered",
-			})
+			ensureAntigravityDefaultPassthroughs(result, antigravityDefaultPassthroughModels)
 			applyAntigravityGemini31ProAliases(result)
 		}
 		return result
@@ -704,7 +715,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	if a.IsGeminiGoogleOne() {
 		return geminicli.GoogleOneModelMapping()
 	}
-	if defaults := defaultModelMappingForAccount(a); defaults != nil {
+	if defaults := defaultModelMappingForPlatform(a.Platform); defaults != nil {
 		return defaults
 	}
 	if a.Platform == domain.PlatformGrok {
@@ -719,8 +730,8 @@ func defaultModelMappingForPlatform(platform string) map[string]string {
 		return domain.DefaultAntigravityModelMapping
 	case domain.PlatformKiro:
 		return domain.DefaultKiroModelMapping
-	case domain.PlatformAdobe:
-		return domain.DefaultAdobeModelMapping
+	case domain.PlatformLeonardo:
+		return domain.DefaultLeonardoModelMapping
 	default:
 		return nil
 	}
@@ -755,6 +766,51 @@ func modelMappingSignature(rawMapping map[string]any) uint64 {
 		_, _ = h.Write([]byte{0xff})
 	}
 	return h.Sum64()
+}
+
+// antigravityDefaultPassthroughModels 是 Antigravity 显式 model_mapping 运行时补齐的默认透传条目：
+// 让新模型发布前保存的映射也能调用这些模型。
+var antigravityDefaultPassthroughModels = []string{
+	"gemini-3-flash",
+	"gemini-3.1-pro-high",
+	"gemini-3.1-pro-low",
+	"gemini-3.6-flash",
+	"gemini-3.6-flash-high",
+	"gemini-3.6-flash-low",
+	"gemini-3.6-flash-medium",
+	"gemini-3.6-flash-tiered",
+	"gemini-3.7-flash",
+	"gemini-3.7-flash-high",
+	"gemini-3.7-flash-low",
+	"gemini-3.7-flash-medium",
+	"gemini-3.7-flash-tiered",
+	"gemini-3.8-flash",
+	"gemini-3.8-flash-high",
+	"gemini-3.8-flash-low",
+	"gemini-3.8-flash-medium",
+	"gemini-3.8-flash-tiered",
+}
+
+// isAntigravityInjectedDefaultPassthrough 判断 GetModelMapping 中的 key→target 是否仅由
+// resolveModelMapping 运行时补齐（管理员未写入 credentials.model_mapping）。
+func (a *Account) isAntigravityInjectedDefaultPassthrough(key, target string) bool {
+	if a == nil || a.Platform != domain.PlatformAntigravity || key != target || !slices.Contains(antigravityDefaultPassthroughModels, key) {
+		return false
+	}
+	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
+	hasExplicitEntry := false
+	for _, v := range rawMapping {
+		if _, ok := v.(string); ok {
+			hasExplicitEntry = true
+			break
+		}
+	}
+	if !hasExplicitEntry {
+		// 空映射走默认目录，不做运行时补齐。
+		return false
+	}
+	_, configured := rawMapping[key].(string)
+	return !configured
 }
 
 func ensureAntigravityDefaultPassthrough(mapping map[string]string, model string) {
@@ -885,12 +941,20 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 // （isDeepseekServableModel）——未知模型名透传上游只会得到 404/400，并误触发
 // per-(账号,模型) 30 分钟冷却；带 [1m] 上下文后缀的写法先归一化再比对。
 func (a *Account) IsModelSupported(requestedModel string) bool {
+	return supportsOpenAIRequestModel(a, requestedModel, false)
+}
+
+func (a *Account) isModelMappingSupported(requestedModel string) bool {
 	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
 	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
 	// credentials 里常残留旧的非空 model_mapping，若不在此放行，透传账号会被
 	// model_mapping 白名单错误排除出候选集，导致 no available accounts / 404（issue #4936）。
 	if a.IsOpenAIPassthroughEnabled() {
 		return true
+	}
+	// Leonardo 只服务平台已实现的模型（首期仅 gpt-image-2），自定义映射也绕不过去。
+	if a.Platform == PlatformLeonardo {
+		return leonardoAccountSupportsModel(a, requestedModel)
 	}
 	mapping := a.GetModelMapping()
 	if len(mapping) == 0 {
@@ -1424,10 +1488,11 @@ func (a *Account) IsOpenAIApiKey() bool {
 
 // GetOpenAIBaseURL 解析 OpenAI 协议族账号的上游 base_url。
 // 适用 openai、国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 OpenCode Go；
-// grok 走 GetGrokBaseURL，此处对 grok 返回 "" 以保持原有行为。Adobe 中转号（apikey + base_url）走 OpenAI
-// 出图转发，必须返回它自己的 base_url，否则会落到 api.openai.com。
+// grok 走 GetGrokBaseURL，此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
-	if isAdobeRelayAccount(a) {
+	// Leonardo 中转号借用 OpenAI Images 转发链路做分组兜底，必须返回它自己的
+	// base_url，否则会落到 api.openai.com。
+	if isLeonardoRelayAccount(a) {
 		return strings.TrimRight(strings.TrimSpace(a.GetCredential("base_url")), "/")
 	}
 	if !a.IsOpenAI() && !a.IsMultiProtocolAPIKey() {
@@ -1621,7 +1686,7 @@ func (a *Account) GetCodingPlanProvider() string {
 	}
 	baseURL := strings.ToLower(a.GetOpenAIBaseURL())
 	switch {
-	case strings.Contains(baseURL, "api.kimi.com/coding"):
+	case isKimiCodingBaseURL(a.GetOpenAIBaseURL()):
 		return PlatformKimi
 	case strings.Contains(baseURL, "bigmodel.cn"), strings.Contains(baseURL, "api.z.ai"):
 		return PlatformZhipu
@@ -1631,6 +1696,24 @@ func (a *Account) GetCodingPlanProvider() string {
 		return PlatformMiniMax
 	default:
 		return ""
+	}
+}
+
+func isKimiCodingBaseURL(baseURL string) bool {
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Opaque != "" ||
+		parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(baseURL, "#") {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	if host != "api.kimi.com" && host != "api.kimi.ai" && host != "api.kimi.com:443" && host != "api.kimi.ai:443" {
+		return false
+	}
+	switch parsed.EscapedPath() {
+	case "/coding", "/coding/", "/coding/v1", "/coding/v1/":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1747,14 +1830,13 @@ func (a *Account) GetOpenAIApiKey() string {
 // GetOpenAIProtocolAPIKey 返回 OpenAI 协议族 APIKey 账号的密钥。
 // 覆盖 openai 原生账号、国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）
 // 以及 OpenCode Go 账号，供转发鉴权、模型列表同步等协议族共用路径使用。
-// Adobe 中转号（apikey + base_url）走 OpenAI 出图转发，同样返回其 api_key。
 // 注意 IsOpenAIApiKey 语义上仅指 openai 平台账号，调度倍率/WS 能力门控
 // 继续以其为准，不受本方法影响。
 func (a *Account) GetOpenAIProtocolAPIKey() string {
 	if a == nil {
 		return ""
 	}
-	if isAdobeRelayAccount(a) {
+	if isLeonardoRelayAccount(a) {
 		return a.GetCredential("api_key")
 	}
 	if a.IsMultiProtocolAPIKey() {
@@ -2163,6 +2245,7 @@ const (
 	OpenAIWSIngressModeCtxPool     = "ctx_pool"
 	OpenAIWSIngressModePassthrough = "passthrough"
 	OpenAIWSIngressModeHTTPBridge  = "http_bridge"
+	OpenAIWSIngressModeWSBridge    = "ws_bridge"
 )
 
 func normalizeOpenAIWSIngressMode(mode string) string {
@@ -2175,6 +2258,8 @@ func normalizeOpenAIWSIngressMode(mode string) string {
 		return OpenAIWSIngressModePassthrough
 	case OpenAIWSIngressModeHTTPBridge:
 		return OpenAIWSIngressModeHTTPBridge
+	case OpenAIWSIngressModeWSBridge:
+		return OpenAIWSIngressModeWSBridge
 	case OpenAIWSIngressModeShared:
 		return OpenAIWSIngressModeShared
 	case OpenAIWSIngressModeDedicated:
@@ -2194,7 +2279,7 @@ func normalizeOpenAIWSIngressDefaultMode(mode string) string {
 	return OpenAIWSIngressModeCtxPool
 }
 
-// ResolveOpenAIResponsesWebSocketV2Mode 返回账号在 WSv2 ingress 下的有效模式（off/ctx_pool/passthrough）。
+// ResolveOpenAIResponsesWebSocketV2Mode 返回账号在 WSv2 ingress 下的有效模式（off/ctx_pool/passthrough/http_bridge/ws_bridge）。
 //
 // 优先级：
 // 1. 分类型 mode 新字段（string）
@@ -2321,12 +2406,62 @@ func (a *Account) IsAnthropicAPIKeyPassthroughEnabled() bool {
 	return ok && enabled
 }
 
+// CreditUnitPriceUSD returns the account-level USD price per upstream credit used
+// for display-only cost estimates (Kiro: extra.kiro_credit_unit_price_usd, Leonardo:
+// extra.leonardo_credit_unit_price_usd). Unset, non-numeric or non-positive values
+// yield 0.
+func (a *Account) CreditUnitPriceUSD() float64 {
+	if a == nil || a.Extra == nil {
+		return 0
+	}
+	var key string
+	switch a.Platform {
+	case PlatformKiro:
+		key = "kiro_credit_unit_price_usd"
+	case PlatformLeonardo:
+		key = "leonardo_credit_unit_price_usd"
+	default:
+		return 0
+	}
+	var value float64
+	switch v := a.Extra[key].(type) {
+	case float64:
+		value = v
+	case float32:
+		value = float64(v)
+	case int:
+		value = float64(v)
+	case int64:
+		value = float64(v)
+	case json.Number:
+		value, _ = v.Float64()
+	case string:
+		value, _ = strconv.ParseFloat(strings.TrimSpace(v), 64)
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+		return 0
+	}
+	return value
+}
+
 // ValidateKiroCreditUnitPriceFromExtra rejects invalid account-level Kiro credit pricing.
 func ValidateKiroCreditUnitPriceFromExtra(extra map[string]any) error {
+	return validateCreditUnitPriceFromExtra(extra, "kiro_credit_unit_price_usd")
+}
+
+// ValidateLeonardoCreditUnitPriceFromExtra rejects invalid account-level Leonardo
+// credit pricing (USD per Leonardo credit; display-only today-stats estimate).
+func ValidateLeonardoCreditUnitPriceFromExtra(extra map[string]any) error {
+	return validateCreditUnitPriceFromExtra(extra, "leonardo_credit_unit_price_usd")
+}
+
+// validateCreditUnitPriceFromExtra checks extra[key] is a finite number >= 0 and
+// normalizes it to float64 in place; a missing or nil key is accepted.
+func validateCreditUnitPriceFromExtra(extra map[string]any, key string) error {
 	if extra == nil {
 		return nil
 	}
-	raw, ok := extra["kiro_credit_unit_price_usd"]
+	raw, ok := extra[key]
 	if !ok || raw == nil {
 		return nil
 	}
@@ -2344,22 +2479,22 @@ func ValidateKiroCreditUnitPriceFromExtra(extra map[string]any) error {
 	case json.Number:
 		parsed, err := v.Float64()
 		if err != nil {
-			return fmt.Errorf("kiro_credit_unit_price_usd must be a number")
+			return fmt.Errorf("%s must be a number", key)
 		}
 		value = parsed
 	case string:
 		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
 		if err != nil {
-			return fmt.Errorf("kiro_credit_unit_price_usd must be a number")
+			return fmt.Errorf("%s must be a number", key)
 		}
 		value = parsed
 	default:
-		return fmt.Errorf("kiro_credit_unit_price_usd must be a number")
+		return fmt.Errorf("%s must be a number", key)
 	}
 	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
-		return fmt.Errorf("kiro_credit_unit_price_usd must be a finite number >= 0")
+		return fmt.Errorf("%s must be a finite number >= 0", key)
 	}
-	extra["kiro_credit_unit_price_usd"] = value
+	extra[key] = value
 	return nil
 }
 
@@ -2374,7 +2509,10 @@ const (
 // 三态：default（跟随渠道）/ enabled（强制开启）/ disabled（强制关闭）。
 // 兼容旧 bool 值：true→enabled, false→default（并记录 debug 日志）。
 func (a *Account) GetWebSearchEmulationMode() string {
-	if a == nil || a.Platform != PlatformAnthropic || a.Type != AccountTypeAPIKey || a.Extra == nil {
+	// OpenAI API Key accounts reach this via /v1/messages; their upstreams
+	// (DeepSeek etc. over Chat Completions) have no web_search tool.
+	if a == nil || a.Type != AccountTypeAPIKey || a.Extra == nil ||
+		(a.Platform != PlatformAnthropic && a.Platform != PlatformOpenAI) {
 		return WebSearchModeDefault
 	}
 	raw := a.Extra[featureKeyWebSearchEmulation]

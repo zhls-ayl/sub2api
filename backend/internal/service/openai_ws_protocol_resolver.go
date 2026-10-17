@@ -11,7 +11,7 @@ const (
 	OpenAIUpstreamTransportResponsesWebsocket   OpenAIUpstreamTransport = "responses_websockets"
 	OpenAIUpstreamTransportResponsesWebsocketV2 OpenAIUpstreamTransport = "responses_websockets_v2"
 	// OpenAIUpstreamTransportResponsesWebsocketV2Ingress 用于 WS ingress 入口选账号：
-	// mode_router_v2 开启时允许 ctx_pool/passthrough/http_bridge，拒绝 off。
+	// mode_router_v2 开启时允许 ctx_pool/passthrough/http_bridge/ws_bridge，拒绝 off。
 	OpenAIUpstreamTransportResponsesWebsocketV2Ingress OpenAIUpstreamTransport = "responses_websockets_v2_ingress"
 )
 
@@ -72,7 +72,7 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 		switch mode {
 		case OpenAIWSIngressModeOff:
 			return openAIWSHTTPDecision("account_mode_off")
-		case OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough:
+		case OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough, OpenAIWSIngressModeWSBridge:
 			// continue
 		case OpenAIWSIngressModeHTTPBridge:
 			return openAIWSHTTPDecision("ws_v2_mode_http_bridge")

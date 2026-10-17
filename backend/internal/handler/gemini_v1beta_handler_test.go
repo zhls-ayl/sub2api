@@ -109,7 +109,7 @@ func TestGeminiV1BetaHandler_ListModelsAntigravityFallback(t *testing.T) {
 		expectedBehavior string
 	}{
 		{
-			name:             "有Gemini账户-调用ForwardAIStudioGET",
+			name:             "有Gemini账户-调用ForwardListModels",
 			hasGeminiAccount: true,
 			hasAntigravity:   false,
 			expectedBehavior: "forward_to_upstream",
@@ -155,7 +155,7 @@ func TestGeminiV1BetaHandler_GetModelAntigravityFallback(t *testing.T) {
 		expectedBehavior string
 	}{
 		{
-			name:             "有Gemini账户-调用ForwardAIStudioGET",
+			name:             "有Gemini账户-调用ForwardGetModel",
 			hasGeminiAccount: true,
 			hasAntigravity:   false,
 			expectedBehavior: "forward_to_upstream",
@@ -217,151 +217,74 @@ func TestShouldFallbackGeminiModel_DelegatesScopeFallback(t *testing.T) {
 	require.True(t, shouldFallbackGeminiModel("gemini-future-model", res))
 }
 
-func TestGeminiV1BetaListModels_AdobeGroupReturnsStaticImageModels(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
-	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
-		Group: &service.Group{Platform: service.PlatformAdobe},
-	})
-
-	(&GatewayHandler{}).GeminiV1BetaListModels(c)
-
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	var got struct {
-		Models []struct {
-			Name                       string   `json:"name"`
-			SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
-		} `json:"models"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.NotEmpty(t, got.Models)
-	require.Equal(t, "models/"+service.AdobeGeminiModels()[0].Name[len("models/"):], got.Models[0].Name)
-	require.Contains(t, got.Models[0].SupportedGenerationMethods, "generateContent")
-}
-
-func TestGeminiV1BetaGetModel_AdobeGroupKnownAndUnknown(t *testing.T) {
+func TestGeminiV1BetaGetModel_CompositeAntigravityRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	t.Run("known", func(t *testing.T) {
+	t.Run("composite route to antigravity gemini model succeeds", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/models/nano-banana-pro", nil)
-		c.Params = gin.Params{{Key: "model", Value: "nano-banana-pro"}}
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/models/gemini-4-argon", nil)
+		req = req.WithContext(service.WithCompositeRouteDecision(req.Context(), service.CompositeRouteDecision{
+			Matched:        true,
+			TargetPlatform: service.PlatformAntigravity,
+			UpstreamModel:  "gemini-4-argon-high",
+		}))
+		c.Request = req
+		c.Params = gin.Params{{Key: "model", Value: "gemini-4-argon"}}
+		groupID := int64(4)
 		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
-			Group: &service.Group{Platform: service.PlatformAdobe},
+			ID:      1,
+			GroupID: &groupID,
+			Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
 		})
+
 		(&GatewayHandler{}).GeminiV1BetaGetModel(c)
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-		require.Contains(t, rec.Body.String(), `"name":"models/nano-banana-pro"`)
+		require.Contains(t, rec.Body.String(), "models/gemini-4-argon-high")
 	})
 
-	t.Run("unknown", func(t *testing.T) {
+	t.Run("composite route to antigravity claude model is rejected on v1beta", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/models/gemini-2.5-flash", nil)
-		c.Params = gin.Params{{Key: "model", Value: "gemini-2.5-flash"}}
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/models/claude-sonnet-5-5-high", nil)
+		req = req.WithContext(service.WithCompositeRouteDecision(req.Context(), service.CompositeRouteDecision{
+			Matched:        true,
+			TargetPlatform: service.PlatformAntigravity,
+			UpstreamModel:  "claude-sonnet-5-5-high",
+		}))
+		c.Request = req
+		c.Params = gin.Params{{Key: "model", Value: "claude-sonnet-5-5-high"}}
+		groupID := int64(4)
 		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
-			Group: &service.Group{Platform: service.PlatformAdobe},
+			ID:      1,
+			GroupID: &groupID,
+			Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
 		})
+
 		(&GatewayHandler{}).GeminiV1BetaGetModel(c)
-		require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
-		require.Contains(t, rec.Body.String(), `"status":`)
-		require.NotContains(t, rec.Body.String(), `"type":`)
+		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	})
 
-	t.Run("allowlist matches models prefix", func(t *testing.T) {
+	t.Run("composite route to antigravity claude model is rejected on generateContent", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/models/models/nano-banana-pro", nil)
-		c.Params = gin.Params{{Key: "model", Value: "models/nano-banana-pro"}}
+		req := httptest.NewRequest(http.MethodPost, "/v1beta/models/claude-sonnet-5-5-high:generateContent", nil)
+		req = req.WithContext(service.WithCompositeRouteDecision(req.Context(), service.CompositeRouteDecision{
+			Matched:        true,
+			TargetPlatform: service.PlatformAntigravity,
+			UpstreamModel:  "claude-sonnet-5-5-high",
+		}))
+		c.Request = req
+		c.Params = gin.Params{{Key: "modelAction", Value: "/claude-sonnet-5-5-high:generateContent"}}
+		groupID := int64(4)
 		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
-			Group: &service.Group{
-				Platform: service.PlatformAdobe,
-				ModelAllowlist: service.GroupModelAllowlist{
-					Enabled: true,
-					Models:  []string{"nano-banana-pro"},
-				},
-			},
+			ID:      1,
+			GroupID: &groupID,
+			Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
 		})
-		(&GatewayHandler{}).GeminiV1BetaGetModel(c)
-		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1, Concurrency: 1})
+
+		(&GatewayHandler{}).GeminiV1BetaModels(c)
+		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	})
-}
-
-// 账号 model_mapping 里的别名能出图，GetModel / ListModels 也必须认得；
-// 通配符、目录名和其它平台模型名不出现在别名里。
-func TestGeminiV1BetaAdobeAccountAliasesAreVisible(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	groupID := int64(9400)
-	repo := &gatewayModelsAccountRepoStub{byGroup: map[int64][]service.Account{
-		groupID: {
-			{
-				ID: 1, Platform: service.PlatformAdobe, Status: service.StatusActive, Schedulable: true,
-				Credentials: map[string]any{"model_mapping": map[string]any{
-					"my-banana":       "nano-banana-pro",
-					"nano-banana-pro": "nano-banana-pro",
-					"banana-*":        "nano-banana",
-					"gemini-2.5-pro":  "nano-banana-pro",
-				}},
-			},
-			{
-				ID: 2, Platform: service.PlatformGemini, Status: service.StatusActive, Schedulable: true,
-				Credentials: map[string]any{"model_mapping": map[string]any{"gemini-only-alias": "gemini-2.5-pro"}},
-			},
-		},
-	}}
-	h := newGatewayModelsHandlerForTest(repo)
-	apiKey := &service.APIKey{
-		GroupID: &groupID,
-		Group:   &service.Group{ID: groupID, Platform: service.PlatformAdobe},
-	}
-
-	getModel := func(model string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(rec)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/models/"+model, nil)
-		c.Params = gin.Params{{Key: "model", Value: model}}
-		c.Set(string(middleware.ContextKeyAPIKey), apiKey)
-		h.GeminiV1BetaGetModel(c)
-		return rec
-	}
-
-	rec := getModel("my-banana")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), `"name":"models/my-banana"`)
-	require.Contains(t, rec.Body.String(), "generateContent")
-
-	// 通配符在路径段校验处就被拒绝。
-	rec = getModel("banana-*")
-	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
-	for _, model := range []string{"gemini-2.5-pro", "gemini-only-alias", "unknown-alias"} {
-		rec := getModel(model)
-		require.Equal(t, http.StatusNotFound, rec.Code, "%s: %s", model, rec.Body.String())
-	}
-
-	rec = httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
-	c.Set(string(middleware.ContextKeyAPIKey), apiKey)
-	h.GeminiV1BetaListModels(c)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	var got struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	names := make(map[string]int, len(got.Models))
-	for _, model := range got.Models {
-		names[model.Name]++
-	}
-	require.Equal(t, 1, names["models/my-banana"])
-	require.Equal(t, 1, names["models/gemini-3-pro-image"])
-	require.Zero(t, names["models/nano-banana-pro"], "历史别名不进目录，即使账号 mapping 写了恒等对")
-	require.Zero(t, names["models/banana-*"])
-	require.Zero(t, names["models/gemini-2.5-pro"])
-	require.Zero(t, names["models/gemini-only-alias"])
-	require.Len(t, got.Models, len(service.AdobeGeminiModels())+1)
 }

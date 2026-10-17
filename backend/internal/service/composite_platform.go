@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/adobe"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
 
@@ -128,27 +127,8 @@ func DetectModelPlatform(model string) (string, bool) {
 	case strings.HasPrefix(normalized, "anthropic.claude-"),
 		strings.HasPrefix(normalized, "claude-"):
 		return PlatformAnthropic, true
-	// gpt-image-* is advertised by both OpenAI and Adobe. Composite must not
-	// guess: explicit composite_model_routes or account ownership decide.
-	// This case must sit above the gpt- prefix or HasPrefix("gpt-image-2", "gpt-")
-	// would still classify it as OpenAI.
-	case normalized == "gpt-image" || strings.HasPrefix(normalized, "gpt-image-"):
-		return "", false
-	// gemini-*-image is advertised by both Gemini and Adobe. Composite must
-	// not guess: this case must sit above IsExternalImageModelID or the
-	// Adobe alias table would classify it as Firefly.
-	case isGeminiImageSharedName(normalized):
-		return "", false
-	// The remaining Adobe catalog names (e.g. gpt-4o-image) must also be
-	// matched before the gpt- prefix below. nano-banana* is Adobe-only.
-	case strings.HasPrefix(normalized, "nano-banana"),
-		strings.HasPrefix(normalized, "flux-"),
-		strings.HasPrefix(normalized, "imagen-"),
-		strings.HasPrefix(normalized, "firefly-"),
-		strings.HasPrefix(normalized, "runway-gen4"),
-		adobe.IsExternalImageModelID(normalized):
-		return PlatformAdobe, true
 	case strings.HasPrefix(normalized, "gpt-"),
+		strings.HasPrefix(normalized, "gpt-image-"),
 		strings.HasPrefix(normalized, "chatgpt-"),
 		strings.HasPrefix(normalized, "codex-"),
 		strings.HasPrefix(normalized, "text-embedding-"),
@@ -233,36 +213,9 @@ func isConcreteRequestPlatform(platform string) bool {
 	return domain.IsConcretePlatform(platform)
 }
 
-// isGeminiImageSharedName 判定是否 Gemini 官方与 Adobe Firefly 同名的生图模型。
-// 只认 Adobe 目录里真有的 gemini-* 名；Adobe 没有的 gemini-*-image 仍归 Gemini。
-func isGeminiImageSharedName(model string) bool {
-	return strings.HasPrefix(model, "gemini-") && adobe.IsExternalImageModelID(model)
-}
-
-// IsCompositeSharedGeminiImageModel 是 isGeminiImageSharedName 的归一化入口
-// （忽略大小写与 models/ 前缀），供 composite 解析与账号归属判断使用。
-func IsCompositeSharedGeminiImageModel(model string) bool {
-	normalized := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
-	return isGeminiImageSharedName(normalized)
-}
-
-// compositeSharedImagePlatform 按入口为 Gemini/Adobe 同名生图模型选平台。
-// Adobe 只接 images 与 /v1beta；Gemini/Antigravity 不接 images。gemini/any
-// 入口两边都能服务，这里不决定，交给账号归属与 /v1beta 中间件的 Gemini 兜底。
-func compositeSharedImagePlatform(model, endpoint string) (string, bool) {
-	if !IsCompositeSharedGeminiImageModel(model) {
-		return "", false
-	}
-	switch endpoint {
-	case CompositeRouteEndpointImages:
-		return PlatformAdobe, true
-	case CompositeRouteEndpointMessages,
-		CompositeRouteEndpointCountTokens,
-		CompositeRouteEndpointResponses,
-		CompositeRouteEndpointChatCompletions,
-		CompositeRouteEndpointEmbeddings:
-		return PlatformGemini, true
-	default:
-		return "", false
-	}
+// isServableAccountPlatform reports whether an account's platform is still
+// served: a registered concrete platform or a profile-only provider. Rows left
+// behind by a removed platform return false.
+func isServableAccountPlatform(platform string) bool {
+	return isConcreteRequestPlatform(platform) || LookupProviderProfile(platform) != nil
 }

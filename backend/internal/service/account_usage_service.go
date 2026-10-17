@@ -110,18 +110,11 @@ type kiroUsageCache struct {
 	timestamp time.Time
 }
 
-// adobeUsageCache 缓存 Adobe credits/balance 结果，与 kiroUsageCache 同构。
-type adobeUsageCache struct {
-	usageInfo *UsageInfo
-	timestamp time.Time
-}
-
 const (
 	apiCacheTTL             = 3 * time.Minute
 	apiErrorCacheTTL        = 1 * time.Minute        // 负缓存 TTL：429 等错误缓存 1 分钟
 	antigravityErrorTTL     = 1 * time.Minute        // Antigravity 错误缓存 TTL（可恢复错误）
 	kiroUsageErrorTTL       = 1 * time.Minute        // Kiro 错误缓存 TTL（可恢复错误）
-	adobeUsageErrorTTL      = 1 * time.Minute        // Adobe credits 错误缓存 TTL（与 Kiro 同）
 	apiQueryMaxJitter       = 800 * time.Millisecond // 用量查询最大随机延迟
 	windowStatsCacheTTL     = 1 * time.Minute
 	openAIProbeCacheTTL     = 10 * time.Minute
@@ -132,17 +125,17 @@ const (
 
 // UsageCache 封装账户使用量相关的缓存
 type UsageCache struct {
-	apiCache          sync.Map           // accountID -> *apiUsageCache
-	windowStatsCache  sync.Map           // accountID -> *windowStatsCache
-	antigravityCache  sync.Map           // accountID -> *antigravityUsageCache
-	kiroUsageCache    sync.Map           // accountID -> *kiroUsageCache
-	adobeUsageCache   sync.Map           // accountID -> *adobeUsageCache
-	apiFlight         singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
-	antigravityFlight singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
-	kiroUsageFlight   singleflight.Group // 防止同一 Kiro 账号的并发请求击穿缓存
-	adobeUsageFlight  singleflight.Group // 防止同一 Adobe 账号的并发请求击穿缓存
-	openAIProbeCache  sync.Map           // accountID -> time.Time
-	grokProbeCache    sync.Map           // accountID -> last billing probe attempt
+	apiCache            sync.Map           // accountID -> *apiUsageCache
+	windowStatsCache    sync.Map           // accountID -> *windowStatsCache
+	antigravityCache    sync.Map           // accountID -> *antigravityUsageCache
+	kiroUsageCache      sync.Map           // accountID -> *kiroUsageCache
+	leonardoUsageCache  sync.Map           // accountID -> *leonardoUsageCache
+	apiFlight           singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
+	antigravityFlight   singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
+	kiroUsageFlight     singleflight.Group // 防止同一 Kiro 账号的并发请求击穿缓存
+	leonardoUsageFlight singleflight.Group // 防止同一 Leonardo 账号的并发请求击穿缓存
+	openAIProbeCache    sync.Map           // accountID -> time.Time
+	grokProbeCache      sync.Map           // accountID -> last billing probe attempt
 }
 
 // NewUsageCache 创建 UsageCache 实例
@@ -270,6 +263,12 @@ type UsageInfo struct {
 	// Antigravity 废弃模型转发规则 (old_model_id -> new_model_id)
 	ModelForwardingRules map[string]string `json:"model_forwarding_rules,omitempty"`
 
+	// Leonardo 积分余额快照（各池剩余量 + 套餐常量表给出的上限）
+	LeonardoPlan         string                   `json:"leonardo_plan,omitempty"`
+	LeonardoPlanName     string                   `json:"leonardo_plan_name,omitempty"`
+	LeonardoCredits      *LeonardoCreditsSnapshot `json:"leonardo_credits,omitempty"`
+	LeonardoTokenRenewal string                   `json:"leonardo_token_renewal,omitempty"`
+
 	// Antigravity 账号是否被上游禁止 (HTTP 403)
 	IsForbidden     bool   `json:"is_forbidden,omitempty"`
 	ForbiddenReason string `json:"forbidden_reason,omitempty"`
@@ -286,29 +285,6 @@ type UsageInfo struct {
 
 	// 获取 usage 时的错误信息（降级返回，而非 500）
 	Error string `json:"error,omitempty"`
-
-	// Adobe credits/balance 快照。planCap 是不透明字符串（见抓包：目前只有 "FREE"），
-	// 调度决策只看数字 available，UI 只做展示。
-	AdobePlanCap       string            `json:"adobe_plan_cap,omitempty"`
-	AdobeCredit        *CreditProgress   `json:"adobe_credit,omitempty"`          // 顶栏进度：来自 total.quota
-	AdobeCreditPools   []AdobeCreditPool `json:"adobe_credit_pools,omitempty"`    // credits.<pool> 明细，本轮不渲染
-	AdobeCreditResetAt *time.Time        `json:"adobe_credit_reset_at,omitempty"` // availableUntil 解析结果
-}
-
-// CreditProgress 是一个「已用/上限/百分比」三件套，与 KiroCreditProgress 分开是
-// 因为 Kiro 那个带 DaysRemaining / ExpiryDate（订阅到期语义），Adobe 是每日重置。
-type CreditProgress struct {
-	CurrentUsage   float64 `json:"current_usage"`
-	UsageLimit     float64 `json:"usage_limit"`
-	PercentageUsed float64 `json:"percentage_used"`
-}
-
-// AdobeCreditPool 是 credits.<pool_name>.quota 的镜像，池名随套餐变化。
-type AdobeCreditPool struct {
-	Name      string `json:"name"`
-	Total     *int64 `json:"total,omitempty"`
-	Used      *int64 `json:"used,omitempty"`
-	Available *int64 `json:"available,omitempty"`
 }
 
 // ClaudeUsageWindow Anthropic /api/oauth/usage 返回的单个用量窗口
@@ -360,22 +336,22 @@ type KiroUsageTokenProvider interface {
 
 // AccountUsageService 账号使用量查询服务
 type AccountUsageService struct {
-	accountRepo             AccountRepository
-	usageLogRepo            UsageLogRepository
-	usageFetcher            ClaudeUsageFetcher
-	geminiQuotaService      *GeminiQuotaService
-	antigravityQuotaFetcher *AntigravityQuotaFetcher
-	kiroTokenProvider       KiroUsageTokenProvider
-	grokQuotaFetcher        *GrokQuotaFetcher
-	grokQuotaService        *GrokQuotaService
-	openAIQuotaService      *OpenAIQuotaService
-	cache                   *UsageCache
-	identityCache           IdentityCache
-	tlsFPProfileService     *TLSFingerprintProfileService
-	kiroCooldownStore       KiroCooldownStore
-	agentIdentityTaskMu     sync.Mutex
-	agentIdentityWS         agentIdentityWSConnectionInvalidator
-	adobeTokenProvider      *AdobeTokenProvider
+	accountRepo                 AccountRepository
+	usageLogRepo                UsageLogRepository
+	usageFetcher                ClaudeUsageFetcher
+	geminiQuotaService          *GeminiQuotaService
+	antigravityQuotaFetcher     *AntigravityQuotaFetcher
+	kiroTokenProvider           KiroUsageTokenProvider
+	grokQuotaFetcher            *GrokQuotaFetcher
+	grokQuotaService            *GrokQuotaService
+	openAIQuotaService          *OpenAIQuotaService
+	cache                       *UsageCache
+	identityCache               IdentityCache
+	tlsFPProfileService         *TLSFingerprintProfileService
+	kiroCooldownStore           KiroCooldownStore
+	sharedLeonardoTokenProvider *LeonardoTokenProvider
+	agentIdentityTaskMu         sync.Mutex
+	agentIdentityWS             agentIdentityWSConnectionInvalidator
 }
 
 // NewAccountUsageService 创建AccountUsageService实例
@@ -404,21 +380,12 @@ func NewAccountUsageService(
 		cache:                   cache,
 		identityCache:           identityCache,
 		tlsFPProfileService:     tlsFPProfileService,
-		adobeTokenProvider:      NewAdobeTokenProvider(accountRepo, nil),
 	}
 }
 
 func (s *AccountUsageService) SetKiroTokenProvider(provider KiroUsageTokenProvider) *AccountUsageService {
 	if s != nil {
 		s.kiroTokenProvider = provider
-	}
-	return s
-}
-
-// SetAdobeTokenProvider 注入与网关共享 OAuthRefreshAPI 的 Adobe token provider。
-func (s *AccountUsageService) SetAdobeTokenProvider(provider *AdobeTokenProvider) *AccountUsageService {
-	if s != nil && provider != nil {
-		s.adobeTokenProvider = provider
 	}
 	return s
 }
@@ -446,6 +413,12 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		return nil, fmt.Errorf("account is required")
 	}
 	accountID := account.ID
+	// Rows left behind by a removed platform would otherwise reach the Anthropic
+	// usage API below with their stored token. Degrade instead of erroring so a
+	// batch usage load does not fail because of them.
+	if account.Platform != "" && !isServableAccountPlatform(account.Platform) {
+		return &UsageInfo{Error: fmt.Sprintf("unsupported account platform: %s", account.Platform)}, nil
+	}
 
 	// Dedicated UI load-test accounts must remain fully interactive without ever
 	// contacting Anthropic with synthetic credentials. Reuse the same persisted
@@ -472,8 +445,12 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		return s.getKiroUsage(ctx, account, "active", forceProbe)
 	}
 
-	if account.Platform == PlatformAdobe {
-		return s.getAdobeUsage(ctx, account, "active", forceProbe)
+	if account.Platform == PlatformLeonardo && account.Type == AccountTypeOAuth {
+		usage, err := s.getLeonardoUsage(ctx, account, "active", forceProbe)
+		if err == nil && usage != nil && usage.Error == "" {
+			s.tryClearRecoverableAccountError(ctx, account)
+		}
+		return usage, err
 	}
 
 	// Antigravity 平台：使用 AntigravityQuotaFetcher 获取额度
@@ -706,8 +683,12 @@ func (s *AccountUsageService) getPassiveUsageForAccount(ctx context.Context, acc
 		return s.getKiroUsage(ctx, account, "passive", false)
 	}
 
-	if account.Platform == PlatformAdobe {
-		return s.getAdobeUsage(ctx, account, "passive", false)
+	// Leonardo Cookie 号：被动读取走积分快照缓存（未命中时拉一次），与 Kiro 同构。
+	if account != nil && account.Platform == PlatformLeonardo {
+		if account.Type != AccountTypeOAuth {
+			return nil, fmt.Errorf("passive usage only supported for Leonardo cookie accounts")
+		}
+		return s.getLeonardoUsage(ctx, account, "passive", false)
 	}
 
 	if !supportsAnthropicPassiveUsage(account) {

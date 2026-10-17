@@ -222,28 +222,49 @@ func (s *OpenAIGatewayService) buildOpenAIWSCreatePayload(reqBody map[string]any
 }
 
 func setOpenAIWSTurnMetadata(payload map[string]any, turnMetadata string) {
-	if len(payload) == 0 {
+	setOpenAIWSClientMetadataValue(payload, openAIWSTurnMetadataHeader, strings.TrimSpace(turnMetadata))
+}
+
+// setOpenAIWSResponsesLiteMetadata 把 HTTP 入站的 Lite 请求头转成 WS 协议的
+// client_metadata 标记。OAuth 账号映射到 gpt-5.5 时与 HTTP 出站
+// （applyMappedGPT55LiteCompatibility）一致，不发 Lite 标记。
+func setOpenAIWSResponsesLiteMetadata(payload map[string]any, account *Account) {
+	if len(payload) == 0 || account == nil {
 		return
 	}
-	metadata := strings.TrimSpace(turnMetadata)
-	if metadata == "" {
+	if account.IsOpenAIOAuthLike() && strings.TrimSpace(openAIWSPayloadString(payload, "model")) == "gpt-5.5" {
+		return
+	}
+	// payload 是 reqBody 的浅拷贝：先复制 client_metadata，避免标记写回 reqBody。
+	if existing, ok := payload["client_metadata"].(map[string]any); ok {
+		next := make(map[string]any, len(existing)+1)
+		for k, v := range existing {
+			next[k] = v
+		}
+		payload["client_metadata"] = next
+	}
+	setOpenAIWSClientMetadataValue(payload, responsesLiteWSMetadataKey, "true")
+}
+
+func setOpenAIWSClientMetadataValue(payload map[string]any, key, value string) {
+	if len(payload) == 0 || value == "" {
 		return
 	}
 
 	switch existing := payload["client_metadata"].(type) {
 	case map[string]any:
-		existing[openAIWSTurnMetadataHeader] = metadata
+		existing[key] = value
 		payload["client_metadata"] = existing
 	case map[string]string:
 		next := make(map[string]any, len(existing)+1)
 		for k, v := range existing {
 			next[k] = v
 		}
-		next[openAIWSTurnMetadataHeader] = metadata
+		next[key] = value
 		payload["client_metadata"] = next
 	default:
 		payload["client_metadata"] = map[string]any{
-			openAIWSTurnMetadataHeader: metadata,
+			key: value,
 		}
 	}
 }

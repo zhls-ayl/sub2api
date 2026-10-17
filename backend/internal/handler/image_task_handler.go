@@ -23,11 +23,12 @@ import (
 type AsyncImageHandler struct {
 	tasks   *service.ImageTaskService
 	openAI  *OpenAIGatewayHandler
+	gateway *GatewayHandler
 	execute func(platform string, c *gin.Context)
 }
 
-func NewAsyncImageHandler(tasks *service.ImageTaskService, openAI *OpenAIGatewayHandler) *AsyncImageHandler {
-	h := &AsyncImageHandler{tasks: tasks, openAI: openAI}
+func NewAsyncImageHandler(tasks *service.ImageTaskService, openAI *OpenAIGatewayHandler, gateway *GatewayHandler) *AsyncImageHandler {
+	h := &AsyncImageHandler{tasks: tasks, openAI: openAI, gateway: gateway}
 	h.execute = h.executeWithGateway
 	return h
 }
@@ -62,7 +63,7 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 	if apiKey.Group != nil {
 		platform = apiKey.Group.Platform
 	}
-	if platform != service.PlatformOpenAI && platform != service.PlatformGrok {
+	if platform != service.PlatformOpenAI && platform != service.PlatformGrok && platform != service.PlatformLeonardo {
 		imageTaskJSONError(c, http.StatusNotFound, "not_found_error", "Images API is not supported for this platform")
 		return
 	}
@@ -213,11 +214,18 @@ func (h *AsyncImageHandler) executeWithGateway(platform string, c *gin.Context) 
 		imageTaskJSONError(c, http.StatusServiceUnavailable, "api_error", "image gateway is unavailable")
 		return
 	}
-	if platform == service.PlatformGrok {
+	switch platform {
+	case service.PlatformGrok:
 		h.openAI.GrokImages(c)
-		return
+	case service.PlatformLeonardo:
+		if h.gateway == nil {
+			imageTaskJSONError(c, http.StatusServiceUnavailable, "api_error", "image gateway is unavailable")
+			return
+		}
+		h.gateway.LeonardoImages(c)
+	default:
+		h.openAI.Images(c)
 	}
-	h.openAI.Images(c)
 }
 
 func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, recorder *httptest.ResponseRecorder, cancel context.CancelFunc) {

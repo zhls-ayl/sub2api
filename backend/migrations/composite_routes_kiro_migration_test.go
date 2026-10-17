@@ -13,8 +13,8 @@ import (
 // 允许的平台集合，需与 domain.IsConcretePlatform（internal/domain/platforms.go）同步。
 // 242 号迁移起白名单改由应用层平台清单校验，不再维护数据库 CHECK 约束。
 var expectedCompositeRouteTargetPlatforms = []string{
-	"adobe", "anthropic", "antigravity", "cline", "command_code", "deepseek", "gemini",
-	"grok", "kimi", "kiro", "minimax", "openai", "opencode_go", "typesafe", "zhipu",
+	"anthropic", "antigravity", "cline", "command_code", "deepseek", "gemini",
+	"grok", "kimi", "kiro", "leonardo", "minimax", "openai", "opencode_go", "typesafe", "zhipu",
 }
 
 const compositeRouteTargetPlatformConstraint = "composite_model_routes_target_platform_check"
@@ -37,7 +37,7 @@ func TestCompositeRoutesKiroMigration(t *testing.T) {
 // TestCompositeRouteTargetPlatformFinalStateCoversAllPlatforms 是防回归护栏：
 // 242 号迁移把 composite_model_routes.target_platform 白名单从数据库 CHECK 约束
 // 改为应用层平台清单校验（domain.IsConcretePlatform），断言清单覆盖全部允许平台
-// （含 fork 的 kiro/adobe），漏项会让对应平台的 composite 路由无法保存。
+// （含 fork 的 kiro），漏项会让对应平台的 composite 路由无法保存。
 func TestCompositeRouteTargetPlatformFinalStateCoversAllPlatforms(t *testing.T) {
 	got := append([]string{}, domain.ConcretePlatformIDs()...)
 	sort.Strings(got)

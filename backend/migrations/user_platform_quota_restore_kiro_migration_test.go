@@ -13,8 +13,8 @@ import (
 // 需与 domain.ConcretePlatformIDs 及 ent/schema/user_platform_quota.go 的 Validate 同步。
 // 242 号迁移起白名单改由应用层平台清单校验，不再维护数据库 CHECK 约束。
 var expectedUserPlatformQuotaPlatforms = []string{
-	"adobe", "anthropic", "antigravity", "cline", "command_code", "deepseek", "gemini",
-	"grok", "kimi", "kiro", "minimax", "openai", "opencode_go", "typesafe", "zhipu",
+	"anthropic", "antigravity", "cline", "command_code", "deepseek", "gemini",
+	"grok", "kimi", "kiro", "leonardo", "minimax", "openai", "opencode_go", "typesafe", "zhipu",
 }
 
 // TestUserPlatformQuotasRestoreKiroMigration 校验 227 号迁移把 224 漏掉的 kiro
@@ -36,7 +36,7 @@ func TestUserPlatformQuotasRestoreKiroMigration(t *testing.T) {
 // TestUserPlatformQuotaPlatformCheckFinalStateCoversAllPlatforms 是防回归护栏：
 // 242 号迁移把 user_platform_quotas.platform 白名单从数据库 CHECK 约束改为应用层
 // 平台清单校验（domain.ConcretePlatformIDs），断言清单覆盖全部允许平台（含 fork 的
-// kiro/adobe），漏项会让对应平台的配额行插入失败。
+// kiro），漏项会让对应平台的配额行插入失败。
 func TestUserPlatformQuotaPlatformCheckFinalStateCoversAllPlatforms(t *testing.T) {
 	got := append([]string{}, domain.ConcretePlatformIDs()...)
 	sort.Strings(got)

@@ -13,7 +13,7 @@ type compositeOwnershipAccountRepo struct {
 	accounts []Account
 }
 
-func (r *compositeOwnershipAccountRepo) ListSchedulableByGroupID(context.Context, int64) ([]Account, error) {
+func (r *compositeOwnershipAccountRepo) ListModelAvailabilityCandidates(context.Context, *int64, []string, bool) ([]Account, error) {
 	return r.accounts, nil
 }
 
@@ -103,6 +103,35 @@ func TestResolveCompositeModelOwnershipAllowsSamePlatformAndRejectsCrossPlatform
 	require.Equal(t, CompositeModelOwnership{Ambiguous: true}, ambiguous)
 }
 
+// Scenario: 只有 OpenAI 网关族的 OAuth 声明方会被标记（API Key 上游可能兼容多协议，
+// Anthropic / Antigravity 的 OAuth 在默认 Anthropic handler 中可正常转发）
+func TestResolveCompositeModelOwnershipFlagsOpenAIGatewayOAuthClaimants(t *testing.T) {
+	groupID := int64(7)
+	repo := &compositeOwnershipAccountRepo{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-6-astra": "gpt-6-astra"}}},
+			{ID: 2, Platform: PlatformDeepseek, Type: AccountTypeAPIKey, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-6-astra": "deepseek-v4-pro", "apikey-only": "deepseek-v4-pro"}}},
+			{ID: 3, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"model_mapping": map[string]any{"apikey-only": "gpt-5"}}},
+			// Antigravity 账号创建时会把默认映射（含 claude-*）写入 model_mapping。
+			{ID: 4, Platform: PlatformAntigravity, Type: AccountTypeOAuth, Credentials: map[string]any{"model_mapping": map[string]any{"claude-opus-4-8": "claude-opus-4-8"}}},
+			{ID: 5, Platform: PlatformAnthropic, Type: AccountTypeSetupToken, Credentials: map[string]any{"model_mapping": map[string]any{"claude-opus-4-8": "claude-opus-4-8"}}},
+		},
+	}
+	svc := &GatewayService{accountRepo: repo}
+
+	withOAuth, err := svc.resolveCompositeModelOwnership(context.Background(), groupID, "gpt-6-astra")
+	require.NoError(t, err)
+	require.Equal(t, CompositeModelOwnership{Ambiguous: true, OpenAIGatewayOAuthClaimed: true}, withOAuth)
+
+	apiKeyOnly, err := svc.resolveCompositeModelOwnership(context.Background(), groupID, "apikey-only")
+	require.NoError(t, err)
+	require.Equal(t, CompositeModelOwnership{Ambiguous: true}, apiKeyOnly)
+
+	anthropicFamily, err := svc.resolveCompositeModelOwnership(context.Background(), groupID, "claude-opus-4-8")
+	require.NoError(t, err)
+	require.Equal(t, CompositeModelOwnership{Ambiguous: true}, anthropicFamily)
+}
+
 func TestNewGatewayServiceWiresCompositeModelOwnershipResolver(t *testing.T) {
 	groupID := int64(7)
 	repo := &compositeOwnershipAccountRepo{
@@ -133,7 +162,8 @@ func TestNewGatewayServiceWiresCompositeModelOwnershipResolver(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		nil, // adobeTokenProvider
+		nil,
+
 		nil,
 		nil,
 		nil,
@@ -165,25 +195,14 @@ func TestDetectModelPlatform(t *testing.T) {
 		{name: "claude", model: "claude-sonnet-4-5", platform: PlatformAnthropic, ok: true},
 		{name: "anthropic prefix", model: "anthropic/claude-opus-4-5", platform: PlatformAnthropic, ok: true},
 		{name: "gpt", model: "gpt-5.1", platform: PlatformOpenAI, ok: true},
-		{name: "gpt-image is not inferred", model: "gpt-image-2", ok: false},
+		{name: "gpt-image stays openai", model: "gpt-image-2", platform: PlatformOpenAI, ok: true},
 		{name: "dall-e stays openai", model: "dall-e-3", platform: PlatformOpenAI, ok: true},
-		{name: "nano-banana adobe", model: "nano-banana-pro", platform: PlatformAdobe, ok: true},
-		{name: "nano-banana models prefix", model: "models/nano-banana-pro", platform: PlatformAdobe, ok: true},
-		{name: "gemini image is not inferred", model: "gemini-2.5-flash-image", ok: false},
-		{name: "gemini 3 pro image is not inferred", model: "gemini-3-pro-image", ok: false},
-		{name: "gemini 3.1 flash image is not inferred", model: "gemini-3.1-flash-image", ok: false},
-		{name: "gemini image preview is not inferred", model: "gemini-3-pro-image-preview", ok: false},
-		{name: "gemini image models prefix is not inferred", model: "models/gemini-2.5-flash-image", ok: false},
-		{name: "non-adobe gemini image stays gemini", model: "gemini-2.0-flash-image", platform: PlatformGemini, ok: true},
+		{name: "gemini image stays gemini", model: "gemini-2.5-flash-image", platform: PlatformGemini, ok: true},
+		{name: "gemini image models prefix stays gemini", model: "models/gemini-3-pro-image", platform: PlatformGemini, ok: true},
+		{name: "gemini 2.0 image stays gemini", model: "gemini-2.0-flash-image", platform: PlatformGemini, ok: true},
 		{name: "future gemini image stays gemini", model: "gemini-3-flash-image", platform: PlatformGemini, ok: true},
-		{name: "flux adobe", model: "flux-pro", platform: PlatformAdobe, ok: true},
-		{name: "imagen adobe", model: "imagen-4", platform: PlatformAdobe, ok: true},
-		{name: "runway adobe", model: "runway-gen4-image", platform: PlatformAdobe, ok: true},
-		{name: "firefly internal adobe", model: "firefly-nano-banana-pro", platform: PlatformAdobe, ok: true},
-		{name: "gpt-4o-image adobe", model: "gpt-4o-image", platform: PlatformAdobe, ok: true},
-		{name: "gpt-4o-image case-insensitive", model: "models/GPT-4o-Image", platform: PlatformAdobe, ok: true},
 		{name: "gpt-4o stays openai", model: "gpt-4o", platform: PlatformOpenAI, ok: true},
-		{name: "legacy gpt-image alias is not inferred", model: "gpt-image-1-mini", ok: false},
+		{name: "legacy gpt-image alias stays openai", model: "gpt-image-1-mini", platform: PlatformOpenAI, ok: true},
 		{name: "o series", model: "o3-mini", platform: PlatformOpenAI, ok: true},
 		{name: "embedding", model: "text-embedding-3-large", platform: PlatformOpenAI, ok: true},
 		{name: "gemini", model: "gemini-3-pro", platform: PlatformGemini, ok: true},
@@ -240,7 +259,7 @@ func TestCompositeGroupSchedulerHasAllCanonicalPlatformBuckets(t *testing.T) {
 		platforms = append(platforms, platform)
 	}
 	require.ElementsMatch(t,
-		[]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformKiro, PlatformGrok, PlatformAdobe, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe, PlatformCommandCode, PlatformCline},
+		[]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformKiro, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe, PlatformCommandCode, PlatformCline, PlatformLeonardo},
 		platforms,
 	)
 }
@@ -250,51 +269,4 @@ func TestCompositeConcretePlatformsIncludeCNProviders(t *testing.T) {
 		require.True(t, isConcreteRequestPlatform(platform))
 		require.True(t, canCopyAccountsFromGroupPlatform(PlatformComposite, platform))
 	}
-}
-
-// Scenario: Gemini/Adobe 同名生图模型按账号实际可服务范围（含默认映射）声明归属
-func TestResolveCompositeModelOwnershipSharedGeminiImageUsesDefaultMappings(t *testing.T) {
-	const model = "gemini-3-pro-image"
-	adobeAccount := Account{ID: 1, Platform: PlatformAdobe}
-	geminiAccount := Account{ID: 2, Platform: PlatformGemini}
-	antigravityAccount := Account{ID: 3, Platform: PlatformAntigravity}
-	openAIAccount := Account{ID: 4, Platform: PlatformOpenAI}
-
-	cases := []struct {
-		name     string
-		accounts []Account
-		want     CompositeModelOwnership
-	}{
-		{"adobe only", []Account{adobeAccount, openAIAccount}, CompositeModelOwnership{TargetPlatform: PlatformAdobe, Matched: true}},
-		{"gemini only", []Account{geminiAccount}, CompositeModelOwnership{TargetPlatform: PlatformGemini, Matched: true}},
-		{"antigravity only", []Account{antigravityAccount}, CompositeModelOwnership{TargetPlatform: PlatformAntigravity, Matched: true}},
-		{"gemini and adobe", []Account{geminiAccount, adobeAccount}, CompositeModelOwnership{Ambiguous: true}},
-		{"no image-capable accounts", []Account{openAIAccount}, CompositeModelOwnership{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			svc := &GatewayService{accountRepo: &compositeOwnershipAccountRepo{accounts: tc.accounts}}
-			got, err := svc.resolveCompositeModelOwnership(context.Background(), 7, model)
-			require.NoError(t, err)
-			require.Equal(t, tc.want, got)
-		})
-	}
-}
-
-// Adobe 自定义映射没列 gemini 名时不声明；非同名模型仍只认显式映射。
-func TestResolveCompositeModelOwnershipDefaultMappingOnlyForSharedGeminiImage(t *testing.T) {
-	svc := &GatewayService{accountRepo: &compositeOwnershipAccountRepo{accounts: []Account{
-		{ID: 1, Platform: PlatformAdobe, Credentials: map[string]any{
-			"model_mapping": map[string]any{"nano-banana-pro": "firefly-nano-banana-pro"},
-		}},
-	}}}
-
-	got, err := svc.resolveCompositeModelOwnership(context.Background(), 7, "gemini-3-pro-image")
-	require.NoError(t, err)
-	require.Equal(t, CompositeModelOwnership{}, got)
-
-	svc = &GatewayService{accountRepo: &compositeOwnershipAccountRepo{accounts: []Account{{ID: 1, Platform: PlatformAdobe}}}}
-	got, err = svc.resolveCompositeModelOwnership(context.Background(), 7, "gpt-image-2")
-	require.NoError(t, err)
-	require.Equal(t, CompositeModelOwnership{}, got)
 }

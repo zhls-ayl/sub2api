@@ -132,8 +132,8 @@ func TestGatewayOpenAICompatibleHandlersClaudeCodeOnlyFallback(t *testing.T) {
 						fallbackGroupID: fallback,
 					}}, nil, nil, nil, nil, nil, nil, nil,
 					service.NewSchedulerSnapshotService(schedulerCache, nil, nil, nil, nil),
-					nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-					nil, nil, nil,
+					nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+					nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 				)
 				cfg := &config.Config{RunMode: config.RunModeSimple}
 				billingCacheService := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)

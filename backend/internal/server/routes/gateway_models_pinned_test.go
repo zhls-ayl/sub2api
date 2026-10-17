@@ -27,6 +27,14 @@ func (r *pinnedModelsRoutesRepository) ListByGroup(context.Context, int64) ([]se
 	return []service.Account{r.account}, nil
 }
 
+func (r *pinnedModelsRoutesRepository) ListSchedulableByGroupID(context.Context, int64) ([]service.Account, error) {
+	return []service.Account{r.account}, nil
+}
+
+func (r *pinnedModelsRoutesRepository) ListModelAvailabilityCandidates(context.Context, *int64, []string, bool) ([]service.Account, error) {
+	return []service.Account{r.account}, nil
+}
+
 type pinnedModelsRoutesUpstream struct {
 	service.HTTPUpstream
 	ordinaryCalls atomic.Int32
@@ -58,7 +66,7 @@ func TestGatewayRoutesPinnedModelsDispatchesOrdinaryAndCodexRequests(t *testing.
 	h := &handler.Handlers{
 		Gateway:       handler.NewGatewayHandler(nil, s, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, cfg, nil),
 		OpenAIGateway: handler.NewOpenAIGatewayHandler(s, nil, nil, nil, nil, nil, nil, nil, nil, cfg),
-		AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
+		AsyncImage:    handler.NewAsyncImageHandler(nil, nil, nil),
 	}
 	group := &service.Group{ID: 1, Platform: service.PlatformOpenAI,
 		CodexModelsManifestConfig: service.GroupCodexModelsManifestConfig{Enabled: true, AccountIDs: []int64{7}}}
@@ -107,7 +115,7 @@ func TestGatewayRoutesRetrievePinnedModel(t *testing.T) {
 	h := &handler.Handlers{
 		Gateway:       handler.NewGatewayHandler(nil, s, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, cfg, nil),
 		OpenAIGateway: handler.NewOpenAIGatewayHandler(s, nil, nil, nil, nil, nil, nil, nil, nil, cfg),
-		AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
+		AsyncImage:    handler.NewAsyncImageHandler(nil, nil, nil),
 	}
 	group := &service.Group{ID: 1, Platform: service.PlatformOpenAI,
 		CodexModelsManifestConfig: service.GroupCodexModelsManifestConfig{Enabled: true, AccountIDs: []int64{7}}}

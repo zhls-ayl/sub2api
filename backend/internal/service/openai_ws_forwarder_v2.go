@@ -34,10 +34,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	attempt int,
 	lastFailureReason string,
 	agentTaskRecoveryTried *bool,
+	bridgeHTTPClient bool,
 ) (*OpenAIForwardResult, error) {
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	// bridgeHTTPClient：ws_bridge 放行的流式 HTTP 客户端，需要在切号、保活、
+	// 响应头与终态事件上对齐 HTTP 上游路径（见 openai_ws_bridge_http.go）。
+	bridgeHTTPClient = bridgeHTTPClient && reqStream
 	responseModelObserver := &upstreamResponseModelObserver{}
 
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
@@ -70,7 +74,13 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
+	if bridgeHTTPClient {
+		turnState = s.guardOpenAIWSBridgeClientTurnState(c, account, turnState)
+	}
 	setOpenAIWSTurnMetadata(payload, turnMetadata)
+	if bridgeHTTPClient && c != nil && c.Request != nil && account.IsOpenAI() && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) {
+		setOpenAIWSResponsesLiteMetadata(payload, account)
+	}
 	applyStagedCodexFingerprintClientMetadata(c, account, payload)
 	previousResponseID := openAIWSPayloadString(payload, "previous_response_id")
 	previousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
@@ -131,7 +141,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if executionScope = strings.TrimSpace(executionScope); executionScope != "" {
 		sessionHash = executionScope
 	}
-	if turnState == "" && stateStore != nil && sessionHash != "" {
+	// HTTP 客户端自行回带 turn-state（HTTP 上游路径也没有会话级回填），不从 WS 会话状态补。
+	if turnState == "" && !bridgeHTTPClient && stateStore != nil && sessionHash != "" {
 		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
 			turnState = savedTurnState
 		}
@@ -261,6 +272,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		var dialErr *openAIWSDialError
 		if errors.As(err, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
 			s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), mappedModel)
+			if bridgeHTTPClient {
+				return nil, s.newOpenAIWSRateLimitFailoverError(account, dialErr.ResponseHeaders, nil, err.Error())
+			}
 		}
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
@@ -331,9 +345,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if stateStore != nil && sessionHash != "" {
 			stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
 		}
-		if c != nil {
+		if c != nil && !bridgeHTTPClient {
 			c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
 		}
+	}
+	// HTTP 客户端的 turn-state 暂存到首个语义输出再提交，避免切号后串到另一个账号的响应；
+	// 复用的池连接握手头属于更早的请求，不透出。
+	var bridgeStagedHeaders http.Header
+	if bridgeHTTPClient && !lease.Reused() {
+		stageOpenAICodexTurnState(&bridgeStagedHeaders, lease.HandshakeHeaders())
 	}
 
 	if err := s.performOpenAIWSGeneratePrewarm(
@@ -361,6 +381,19 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		)
 		return nil, wrapOpenAIWSFallback("write_request", err)
 	}
+	// ws_bridge HTTP 客户端与 HTTP 上游、WS passthrough 一样受首输出超时约束，
+	// 不能只靠 WS 读超时兜底。
+	bridgeFirstOutputStartedAt := time.Now()
+	bridgeFirstOutputEffort := ""
+	var bridgeFirstOutputTimeout time.Duration
+	if bridgeHTTPClient {
+		if effort := extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel); effort != nil {
+			bridgeFirstOutputEffort = *effort
+		}
+		bridgeFirstOutputTimeout = s.openAIFirstOutputTimeout(bridgeFirstOutputEffort)
+	}
+	bridgeFirstOutputPending := bridgeFirstOutputTimeout > 0
+	bridgeFirstOutputDeadline := bridgeFirstOutputStartedAt.Add(bridgeFirstOutputTimeout)
 	if debugEnabled {
 		logOpenAIWSModeDebug(
 			"write_request_sent account_id=%d conn_id=%s stream=%v payload_bytes=%d previous_response_id=%s",
@@ -462,6 +495,36 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 		flusher = f
 	}
+	stopBridgeKeepalive := func() {}
+	var bridgeOutput *openAIWSBridgeStreamOutput
+	if bridgeHTTPClient {
+		stopBridgeKeepalive = s.startOpenAIWSBridgeKeepalive(ctx, c, flusher)
+		defer stopBridgeKeepalive()
+		bridgeOutput = newOpenAIWSBridgeStreamOutput()
+	}
+	// bridgeFailover 在首个语义输出前把本次 attempt 交还 handler 切号。
+	bridgeFailover := func(failoverErr *UpstreamFailoverError) (*OpenAIForwardResult, error) {
+		stopBridgeKeepalive()
+		clearOpenAIWSBridgeAttemptHeaders(c)
+		return nil, failoverErr
+	}
+	bridgeFirstOutputTimedOut := func() (*OpenAIForwardResult, error) {
+		lease.MarkBroken()
+		wsProxyID, wsProxyName := opsUpstreamWSProxyAttribution(account)
+		return bridgeFailover(s.newOpenAIFirstOutputTimeoutError(
+			ctx,
+			c,
+			account,
+			wsProxyID,
+			wsProxyName,
+			bridgeFirstOutputStartedAt,
+			originalModel,
+			bridgeFirstOutputEffort,
+			bridgeFirstOutputTimeout,
+			"websocket_first_semantic_output",
+			lease.HandshakeHeaders(),
+		))
+	}
 
 	flushBatchSize := s.openAIWSEventFlushBatchSize()
 	flushInterval := s.openAIWSEventFlushInterval()
@@ -483,6 +546,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	emitStreamMessage := func(message []byte, forceFlush bool) {
 		if clientDisconnected {
 			return
+		}
+		if bridgeHTTPClient && !wroteDownstream {
+			stopBridgeKeepalive()
+			s.commitOpenAIWSBridgeStagedHeaders(c, account, bridgeStagedHeaders)
 		}
 		frame := make([]byte, 0, len(message)+8)
 		frame = append(frame, "data: "...)
@@ -532,11 +599,21 @@ readLoop:
 		var message []byte
 		var readErr error
 		readUsedDetachedContext := upstreamReadDetached
+		readCappedByFirstOutput := false
+		if bridgeFirstOutputPending && !clientDisconnected && !time.Now().Before(bridgeFirstOutputDeadline) {
+			return bridgeFirstOutputTimedOut()
+		}
 		if len(pendingJSONDocuments) > 0 {
 			message = pendingJSONDocuments[0]
 			pendingJSONDocuments = pendingJSONDocuments[1:]
 		} else {
 			currentReadTimeout := readTimeout
+			if bridgeFirstOutputPending && !clientDisconnected {
+				if remaining := time.Until(bridgeFirstOutputDeadline); remaining < currentReadTimeout {
+					currentReadTimeout = remaining
+					readCappedByFirstOutput = true
+				}
+			}
 			if clientDisconnected && !clientDisconnectDrainStartedAt.IsZero() {
 				remaining := readTimeout - time.Since(clientDisconnectDrainStartedAt)
 				if remaining <= 0 {
@@ -581,6 +658,10 @@ readLoop:
 				return nil, wrapOpenAIWSFallback("invalid_event_json", errors.New("upstream websocket returned malformed Responses event JSON"))
 			}
 			return nil, errors.New("upstream websocket returned malformed Responses event JSON after downstream output")
+		}
+		if readErr != nil && readCappedByFirstOutput && !clientDisconnected &&
+			(errors.Is(readErr, context.DeadlineExceeded) || !time.Now().Before(bridgeFirstOutputDeadline)) {
+			return bridgeFirstOutputTimedOut()
 		}
 		if readErr != nil {
 			lease.MarkBroken()
@@ -628,6 +709,9 @@ readLoop:
 			firstEventType = eventType
 		}
 		lastEventType = eventType
+		if bridgeFirstOutputPending && openAIWSPassthroughStartsSemanticOutput(message) {
+			bridgeFirstOutputPending = false
+		}
 
 		if responseID == "" && eventResponseID != "" {
 			responseID = eventResponseID
@@ -731,8 +815,31 @@ readLoop:
 			if !wroteDownstream && canFallback {
 				return nil, wrapOpenAIWSFallback(fallbackReason, errors.New(errMsg))
 			}
+			if bridgeHTTPClient && !wroteDownstream {
+				if failoverErr := s.newOpenAIWSBridgeEventFailoverError(c, account, mappedModel, eventType, message, lease.HandshakeHeaders()); failoverErr != nil {
+					return bridgeFailover(failoverErr)
+				}
+			}
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			setOpsUpstreamError(c, statusCode, errMsg, "")
+			if bridgeHTTPClient {
+				// 对齐 HTTP 上游路径的错误语义：未写出时按状态码 + JSON 返回，已提交时只发
+				// 一个终止事件；并标记已提交，避免 handler 再追加通用 response.failed。
+				stopBridgeKeepalive()
+				if !clientDisconnected {
+					clientPayload, clientMsg := s.openAIWSBridgeClientErrorPayload(ctx, account, message)
+					if !wroteDownstream && !c.Writer.Written() {
+						s.writeOpenAIWSBridgeUncommittedErrorEvent(c, account, clientPayload, clientMsg, statusCode)
+					} else {
+						flushBufferedStreamEvents("error_event")
+						for _, frame := range openAIWSBridgeCommittedErrorFrames(account, responseID, originalModel, clientPayload, clientMsg, bridgeOutput, wroteDownstream) {
+							emitStreamMessage(frame, true)
+						}
+						MarkResponseCommitted(c)
+					}
+				}
+				return nil, fmt.Errorf("upstream response failed: %s", errMsg)
+			}
 			if reqStream && !clientDisconnected {
 				flushBufferedStreamEvents("error_event")
 				emitStreamMessage(message, true)
@@ -749,12 +856,16 @@ readLoop:
 		}
 
 		if reqStream {
+			clientMessage := message
+			if bridgeOutput != nil && !clientDisconnected {
+				clientMessage = bridgeOutput.prepare(eventType, message, wroteDownstream)
+			}
 			// 在首个 token 前先缓冲事件（如 response.created），
 			// 以便上游早期断连时仍可安全回退到 HTTP，不给下游发送半截流。
 			shouldBuffer := firstTokenMs == nil && !isTokenEvent && !isTerminalEvent
 			if shouldBuffer {
-				buffered := make([]byte, len(message))
-				copy(buffered, message)
+				buffered := make([]byte, len(clientMessage))
+				copy(buffered, clientMessage)
 				bufferedStreamEvents = append(bufferedStreamEvents, buffered)
 				bufferedEventCount++
 				if debugEnabled && shouldLogOpenAIWSBufferedEvent(bufferedEventCount) {
@@ -769,8 +880,15 @@ readLoop:
 					)
 				}
 			} else {
+				if bridgeHTTPClient && !wroteDownstream && eventType == "response.failed" {
+					if failoverErr := s.newOpenAIWSBridgeEventFailoverError(c, account, mappedModel, eventType, message, lease.HandshakeHeaders()); failoverErr != nil {
+						// 正常路径在下发后由 handleOpenAIWSTerminalTransientFailure 处理账号副作用，切号前补上。
+						s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
+						return bridgeFailover(failoverErr)
+					}
+				}
 				flushBufferedStreamEvents(eventType)
-				emitStreamMessage(message, isTerminalEvent)
+				emitStreamMessage(clientMessage, isTerminalEvent)
 			}
 		} else {
 			if responseField.Exists() && responseField.Type == gjson.JSON {
