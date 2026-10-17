@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -561,4 +562,49 @@ func TestKiroAccountLacksEnterpriseProfile(t *testing.T) {
 	}
 
 	require.False(t, kiroAccountLacksEnterpriseProfile(nil))
+}
+
+func TestBuildKiroPayloadClampsMaxTokensToStoredOutputLimit(t *testing.T) {
+	accountWithOutputLimit := func(limits map[string]int64) *Account {
+		account := &Account{ID: 21, Platform: PlatformKiro, Type: AccountTypeOAuth}
+		models := make(map[string]UpstreamModelMetadata, len(limits))
+		for id, limit := range limits {
+			models[id] = UpstreamModelMetadata{ID: id, MaxOutputTokens: limit}
+		}
+		account.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{
+			Source: "kiro",
+			Models: models,
+		})
+		return account
+	}
+	maxTokensOf := func(t *testing.T, account *Account, requestModel, modelID string, maxTokens int) int64 {
+		t.Helper()
+		body := []byte(fmt.Sprintf(
+			`{"model":%q,"max_tokens":%d,"messages":[{"role":"user","content":"hello"}]}`,
+			requestModel, maxTokens,
+		))
+		result, err := (&GatewayService{}).buildKiroPayloadForAccount(
+			context.Background(), account, nil, body, modelID, "kiro-access-token", requestModel, nil,
+		)
+		require.NoError(t, err)
+		got := gjson.GetBytes(result.Payload, "inferenceConfig.maxTokens").Int()
+		require.Equal(t, got, int64(result.Context.MaxOutputTokens))
+		return got
+	}
+
+	// claude-sonnet-5.5 的名字猜测上限是 128000。ListAvailableModels 记的是 64000 时跟 Kiro 实际值。
+	sonnet55 := accountWithOutputLimit(map[string]int64{"claude-sonnet-5.5": 64_000})
+	require.Equal(t, int64(64_000), maxTokensOf(t, sonnet55, "claude-sonnet-5-5", "claude-sonnet-5.5", 128_000))
+	require.Equal(t, int64(1_000), maxTokensOf(t, sonnet55, "claude-sonnet-5-5", "claude-sonnet-5.5", 1_000))
+	require.Equal(t, int64(64_000), maxTokensOf(t, sonnet55, "claude-sonnet-5-5", "claude-sonnet-5.5", -1))
+
+	// claude-sonnet-5 上游报告 64000，客户端按 128000 的 schema 发来时截断，不拒绝。
+	sonnet5 := accountWithOutputLimit(map[string]int64{"claude-sonnet-5": 64_000})
+	require.Equal(t, int64(64_000), maxTokensOf(t, sonnet5, "claude-sonnet-5", "claude-sonnet-5", 128_000))
+	require.Equal(t, int64(64_000), maxTokensOf(t, sonnet5, "claude-sonnet-5-thinking", "claude-sonnet-5", 128_000))
+
+	// 列表里没有这个模型时不按别的模型的上限截断，max_tokens 保持原值。
+	require.Equal(t, int64(90_000), maxTokensOf(t, sonnet5, "claude-sonnet-5-5", "claude-sonnet-5.5", 90_000))
+	plain := &Account{ID: 22, Platform: PlatformKiro, Type: AccountTypeOAuth}
+	require.Equal(t, int64(90_000), maxTokensOf(t, plain, "claude-sonnet-5-5", "claude-sonnet-5.5", 90_000))
 }

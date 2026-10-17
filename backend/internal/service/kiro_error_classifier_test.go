@@ -24,6 +24,16 @@ func TestClassifyKiroHTTPErrorBadRequestCategories(t *testing.T) {
 			want: kiroErrorBadRequestToolPairing,
 		},
 		{
+			name: "content length threshold",
+			body: `{"reason":"CONTENT_LENGTH_EXCEEDS_THRESHOLD","message":"Input is too long."}`,
+			want: kiroErrorContentLength,
+		},
+		{
+			name: "content length nested reason",
+			body: `{"error":{"reason":"CONTENT_LENGTH_EXCEEDS_THRESHOLD","message":"Input is too long."}}`,
+			want: kiroErrorContentLength,
+		},
+		{
 			name: "invalid model id",
 			body: `{"message":"invalid modelId: model not supported"}`,
 			want: kiroErrorBadRequestInvalidModel,

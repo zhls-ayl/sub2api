@@ -806,7 +806,7 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 	ensureKiroEnterpriseRealProfileArn(ctx, s.accountRepo, account, currentToken)
 	profileArn := kiroOAuthRequestProfileArn(account)
 	preparedBody := prepareKiroPayloadBodyForRequestModel(anthropicBody, mappedModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
+	buildResult, err := buildKiroUpstreamPayload(account, preparedBody, modelID, profileArn, nil, mappedModel)
 	if err != nil {
 		return nil, err
 	}
@@ -851,7 +851,7 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
 						profileArn = kiroOAuthRequestProfileArn(account)
-						buildResult, err = kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
+						buildResult, err = buildKiroUpstreamPayload(account, preparedBody, modelID, profileArn, nil, mappedModel)
 						if err != nil {
 							return nil, err
 						}

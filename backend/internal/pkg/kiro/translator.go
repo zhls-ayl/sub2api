@@ -485,8 +485,17 @@ func clampFloat(value, minValue, maxValue float64) float64 {
 }
 
 func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
+	return BuildKiroPayloadWithOutputLimit(claudeBody, modelID, profileArn, origin, headers, 0)
+}
+
+// BuildKiroPayloadWithOutputLimit 在 outputLimit > 0 时用该值作为最大输出 token。
+// 这是 ListAvailableModels 同步下来的 maxOutputTokens。小于等于 0 时仍按模型名猜测上限。
+func BuildKiroPayloadWithOutputLimit(claudeBody []byte, modelID, profileArn, origin string, headers http.Header, outputLimit int) (*KiroBuildResult, error) {
 	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
-	outputCap := kiroMaxOutputTokensForModel(firstNonEmptyString(gjson.GetBytes(claudeBody, "model").String(), modelID))
+	outputCap := outputLimit
+	if outputCap <= 0 {
+		outputCap = kiroMaxOutputTokensForModel(firstNonEmptyString(gjson.GetBytes(claudeBody, "model").String(), modelID))
+	}
 	var maxTokens int64
 	if mt := gjson.GetBytes(claudeBody, "max_tokens"); mt.Exists() {
 		maxTokens = mt.Int()
@@ -2096,10 +2105,21 @@ func truncateKiroPayloadToLimit(payload *KiroPayload, hasPriming bool) error {
 		}
 	}
 
-	return fmt.Errorf(
-		"kiro payload exceeds %d bytes without a safe history cut",
-		kiroMaxPayloadBytes,
-	)
+	return &PayloadTooLargeError{Limit: kiroMaxPayloadBytes}
+}
+
+// PayloadTooLargeError 表示丢掉旧历史并缩短可缩文本后，请求仍然超过字节上限。
+// 字节上限本身不变；调用方把它变成不可重试的 prompt too long，而不是 502。
+type PayloadTooLargeError struct {
+	Limit int
+}
+
+func (e *PayloadTooLargeError) Error() string {
+	limit := kiroMaxPayloadBytes
+	if e != nil && e.Limit > 0 {
+		limit = e.Limit
+	}
+	return fmt.Sprintf("kiro payload exceeds %d bytes without a safe history cut", limit)
 }
 
 func dropLeadingKiroAssistantHistory(tail []KiroHistoryMessage) []KiroHistoryMessage {

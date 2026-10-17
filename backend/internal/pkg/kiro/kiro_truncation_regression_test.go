@@ -2,6 +2,7 @@ package kiro
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -384,10 +385,10 @@ func TestKiroOversizedToolInputLimit(t *testing.T) {
 
 	err := truncateKiroPayloadToLimit(p, false)
 
-	if err == nil {
-		t.Fatalf("Expected an explicit error for oversized tool input")
+	var tooLarge *PayloadTooLargeError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("Expected PayloadTooLargeError for oversized tool input, got %v", err)
 	}
-
 	if !strings.Contains(err.Error(), "kiro payload exceeds") {
 		t.Fatalf("Unexpected error: %v", err)
 	}

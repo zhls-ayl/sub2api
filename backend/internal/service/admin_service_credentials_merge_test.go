@@ -91,6 +91,36 @@ func TestUpdateAccount_ExplicitNewTokenOverwrites(t *testing.T) {
 	require.Equal(t, "sk-old", repo.account.Credentials["api_key"])
 }
 
+func TestUpdateAccount_PreservesUpstreamModelMetadataWhenExtraReplaced(t *testing.T) {
+	accountID := int64(301)
+	snapshot := map[string]any{
+		"source": "kiro",
+		"models": map[string]any{
+			"claude-sonnet-5": map[string]any{"max_output_tokens": float64(64000)},
+		},
+	}
+	repo := &updateAccountCredsRepoStub{
+		account: &Account{
+			ID:       accountID,
+			Platform: PlatformKiro,
+			Type:     AccountTypeOAuth,
+			Status:   StatusActive,
+			Extra: map[string]any{
+				UpstreamModelMetadataExtraKey: snapshot,
+				"display_name":                "old",
+			},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	updated, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Extra: map[string]any{"display_name": "new"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "new", updated.Extra["display_name"])
+	require.Equal(t, snapshot, updated.Extra[UpstreamModelMetadataExtraKey])
+}
+
 func TestUpdateAccount_EmptyCredentialsSkipsUpdate(t *testing.T) {
 	accountID := int64(204)
 	repo := &updateAccountCredsRepoStub{

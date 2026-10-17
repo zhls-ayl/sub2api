@@ -359,6 +359,30 @@ func TestKiroInputTokenEstimateSeparatesVisualTokensFromBase64(t *testing.T) {
 	}
 }
 
+func TestKiroInputTokenEstimateIgnoresDocumentBase64(t *testing.T) {
+	data := strings.Repeat("A", 200_000)
+	body := []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"read this"},{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":%q}}]}]}`, data))
+	textOnly := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"read this"}]}]}`)
+
+	got := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, body)
+	base := estimateKiroInputTokens(context.Background(), anthropictokenizer.AlgorithmOfficial, textOnly)
+	if got > base+80 {
+		t.Fatalf("document base64 inflated tokens: got %d base %d", got, base)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	sanitized, _ := sanitizeKiroImagesForTokenEstimate(context.Background(), payload["messages"])
+	canonical, err := canonicalJSON(sanitized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(canonical, []byte(data[:64])) {
+		t.Fatal("sanitized token payload must not retain document base64")
+	}
+}
+
 func TestKiroImageTokenSourcesSupportAnthropicAndOpenAIShapes(t *testing.T) {
 	dataURL := kiroPNGDataURL(t, 200, 200, color.RGBA{A: 255})
 	base64Data := strings.TrimPrefix(dataURL, "data:image/png;base64,")

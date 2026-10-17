@@ -129,6 +129,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		cachePlan := s.prepareKiroChatCompletionsCacheEmulationUsage(ctx, account, group, body, mappedModel, estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), anthropicBody))
 		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, parsed, anthropicBody, mappedModel, originalModel, c.Request.Header, group, cachePlan)
 		if err != nil {
+			if tooLong, ok := kiroPromptTooLongFrom(err); ok {
+				writeGatewayCCError(c, http.StatusBadRequest, "invalid_request_error", tooLong.Error())
+				return nil, tooLong
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			setOpsUpstreamError(c, 0, safeErr, "")
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
