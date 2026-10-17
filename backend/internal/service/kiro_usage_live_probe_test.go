@@ -154,8 +154,8 @@ func TestLiveKiroUsageLimitsFromExportedAccount(t *testing.T) {
 	require.NotNil(t, hybrid)
 	require.NotEmpty(t, hybrid.UsageBreakdownList)
 
-	modelSvc := &AccountTestService{}
-	models, modelsErr := modelSvc.fetchKiroUpstreamModels(ctx, account)
+	modelSvc := &AccountTestService{kiroTokenProvider: NewKiroTokenProvider(nil, nil, nil)}
+	models, modelsErr := modelSvc.fetchKiroDirectUpstreamModels(ctx, account)
 	if modelsErr != nil {
 		t.Fatalf("LIST MODELS FAIL %v", modelsErr)
 	}
