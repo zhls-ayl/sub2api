@@ -148,7 +148,7 @@ func requireKiroUsageLimitsQuery(t *testing.T, r *http.Request, profileArn strin
 	require.Equal(t, kiroUsageResourceType, r.URL.Query().Get("resourceType"))
 	require.Equal(t, kiroUsageIsEmailRequired, r.URL.Query().Get("isEmailRequired"))
 	require.Equal(t, profileArn, r.URL.Query().Get("profileArn"))
-	require.Regexp(t, `api/codewhispererstreaming#1\.0\.(44|39|34)\b`, r.Header.Get("User-Agent"))
+	require.Contains(t, r.Header.Get("User-Agent"), "api/codewhispererstreaming#1.0.34")
 	require.Contains(t, r.Header.Get("User-Agent"), "KiroIDE-1.0.437-")
 	require.Contains(t, r.Header.Get("X-Amz-User-Agent"), "KiroIDE-1.0.437-")
 }
