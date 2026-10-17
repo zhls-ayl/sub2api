@@ -3,8 +3,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -222,6 +224,85 @@ func TestForwardKiroMessagesOnlyWebSearchPromptTooLong(t *testing.T) {
 	require.False(t, repo.called)
 	require.False(t, repo.rateCalled)
 	require.NotContains(t, rec.Body.String(), "Upstream request failed")
+}
+
+func TestForwardKiroMessagesMixedToolPromptTooLong(t *testing.T) {
+	// 第一轮模型调用成功。搜索结果注入后的下一轮才超过 maxInputTokens，
+	// 错误包在 later-round 里。mixed-tool 的 default 必须先写成 400，
+	// 不能交给 finishKiroWebSearchLoopError 变成 502。
+	kiroMixedToolWebSearchCache.Store(&cachedKiroMixedToolWebSearchConfig{expiresAt: 0})
+	t.Cleanup(func() {
+		kiroMixedToolWebSearchCache.Store(&cachedKiroMixedToolWebSearchConfig{expiresAt: 0})
+	})
+	kiroWebSearchDescCache.Delete(kiropkg.BuildMcpEndpoint("us-east-1"))
+
+	snippet := strings.Repeat("search result ", 4000)
+	inner, err := json.Marshal(map[string]any{
+		"results": []any{map[string]any{
+			"title":   "forecast",
+			"url":     "https://example.com/weather",
+			"snippet": snippet,
+		}},
+	})
+	require.NoError(t, err)
+	searchBody, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"result": map[string]any{
+			"content": []any{map[string]any{"type": "text", "text": string(inner)}},
+		},
+	})
+	require.NoError(t, err)
+
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildKiroEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_search",
+			"name":      "web_search",
+			"input":     map[string]any{"query": "weather in tokyo"},
+			"stop":      true,
+		},
+	}))
+	repo := &recordingKiroTempUnschedRepo{}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+			Body:       io.NopCloser(stream),
+		},
+		newJSONResponse(http.StatusOK, string(searchBody)),
+	}}
+	svc := newKiroPromptGateway(upstream, repo)
+	svc.settingService = &SettingService{settingRepo: &settingRepoStub{values: map[string]string{
+		SettingKeyKiroMixedToolWebSearchConfig: `{"enabled":true}`,
+	}}}
+	account := kiroPromptLimitAccount(2_000, "claude-sonnet-4-5")
+	body, err := json.Marshal(map[string]any{
+		"model":      "claude-sonnet-4-5",
+		"max_tokens": 32,
+		"messages": []any{
+			map[string]any{"role": "user", "content": "weather in tokyo"},
+		},
+		"tools": []any{
+			map[string]any{"type": "web_search_20250305", "name": "web_search"},
+			map[string]any{"name": "read_file", "input_schema": map[string]any{"type": "object"}},
+		},
+	})
+	require.NoError(t, err)
+	c, rec := kiroPromptGin()
+	parsed := &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: "claude-sonnet-4-5",
+	}
+
+	_, err = svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.Error(t, err)
+	var failover *UpstreamFailoverError
+	require.NotErrorAs(t, err, &failover)
+	requireKiroPromptTooLongResponse(t, rec, false)
+	require.Regexp(t, `^prompt is too long: \d+ tokens > 2000 maximum$`, gjson.Get(rec.Body.String(), "error.message").String())
+	require.NotContains(t, rec.Body.String(), "Upstream request failed")
+	require.False(t, repo.called)
+	require.False(t, repo.rateCalled)
 }
 
 func TestHandleKiroHTTPErrorContentLengthDoesNotFailover(t *testing.T) {

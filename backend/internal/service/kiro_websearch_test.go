@@ -64,7 +64,7 @@ func TestWriteKiroWebSearchFinalRound_EndsWithMessageDeltaAndStop(t *testing.T) 
 	err := writeKiroWebSearchFinalRound(&out, chunks, 2, &kiropkg.StreamResult{
 		StopReason: "end_turn",
 		Usage:      kiropkg.Usage{OutputTokens: 15, KiroCredits: 0.17},
-	})
+	}, 0, false)
 	require.NoError(t, err)
 
 	body := out.String()
@@ -106,7 +106,7 @@ func TestHandleStreamingResponse_KiroWebSearchFinalRoundRecordsUsage(t *testing.
 		}, 0, &kiropkg.StreamResult{
 			StopReason: "end_turn",
 			Usage:      kiropkg.Usage{OutputTokens: 15, KiroCredits: 0.17},
-		})
+		}, 1, false)
 	}()
 
 	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-sonnet-4-6", "claude-sonnet-4-6", false)
@@ -118,11 +118,13 @@ func TestHandleStreamingResponse_KiroWebSearchFinalRoundRecordsUsage(t *testing.
 	require.Equal(t, 75, result.usage.CacheCreationInputTokens)
 	require.Equal(t, 15, result.usage.OutputTokens)
 	require.InDelta(t, 0.17, result.usage.KiroCredits, 0.000001)
+	require.Equal(t, 1, result.usage.WebSearchRequests)
 
 	body := rec.Body.String()
 	require.Contains(t, body, "event: message_delta")
 	require.Contains(t, body, "event: message_stop")
 	require.Contains(t, body, `"output_tokens":15`)
+	require.Contains(t, body, `"web_search_requests":1`)
 	require.Contains(t, body, `"stop_reason":"end_turn"`)
 	require.NotContains(t, body, `"input_tokens":9999`)
 	require.NotContains(t, body, "_sub2api_kiro_credits")

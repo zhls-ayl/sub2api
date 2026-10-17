@@ -1604,6 +1604,40 @@ export async function resetWebSearchUsage(payload: {
   );
 }
 
+export interface KiroMixedToolWebSearchConfig {
+  enabled: boolean;
+  group_modes?: Record<string, "enabled" | "disabled">;
+}
+
+export async function getKiroMixedToolWebSearchConfig(): Promise<KiroMixedToolWebSearchConfig> {
+  const { data } = await apiClient.get<KiroMixedToolWebSearchConfig>(
+    "/admin/settings/kiro-mixed-tool-web-search",
+  );
+  return data;
+}
+
+export async function updateKiroMixedToolWebSearchConfig(config: {
+  enabled: boolean;
+  group_modes?: Record<string, string>;
+}): Promise<KiroMixedToolWebSearchConfig> {
+  const { data } = await apiClient.put<KiroMixedToolWebSearchConfig>(
+    "/admin/settings/kiro-mixed-tool-web-search",
+    config,
+  );
+  return data;
+}
+
+export async function setKiroMixedToolWebSearchGroupMode(
+  groupId: number,
+  mode: "default" | "enabled" | "disabled",
+): Promise<KiroMixedToolWebSearchConfig> {
+  const { data } = await apiClient.put<KiroMixedToolWebSearchConfig>(
+    `/admin/settings/kiro-mixed-tool-web-search/groups/${groupId}`,
+    { mode },
+  );
+  return data;
+}
+
 export const settingsAPI = {
   getSettings,
   updateSettings,
@@ -1633,6 +1667,9 @@ export const settingsAPI = {
   updateWebSearchEmulationConfig,
   testWebSearchEmulation,
   resetWebSearchUsage,
+  getKiroMixedToolWebSearchConfig,
+  updateKiroMixedToolWebSearchConfig,
+  setKiroMixedToolWebSearchGroupMode,
 };
 
 export default settingsAPI;

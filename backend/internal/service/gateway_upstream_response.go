@@ -694,6 +694,7 @@ func partialStreamUsageResult(c *gin.Context, resp *http.Response, streamResult 
 		RequestID:                     resp.Header.Get("x-request-id"),
 		UpstreamHeaders:               resp.Header,
 		Usage:                         *streamResult.usage,
+		WebSearchCalls:                streamResult.usage.WebSearchRequests,
 		Model:                         model,
 		UpstreamModel:                 upstreamModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),
@@ -1200,6 +1201,8 @@ type sseUsagePatch struct {
 	hasCacheCreation1h       bool
 	kiroCredits              float64
 	hasKiroCredits           bool
+	webSearchRequests        int
+	hasWebSearchRequests     bool
 }
 
 func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePatch {
@@ -1278,6 +1281,12 @@ func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePat
 			patch.kiroCredits = v
 			patch.hasKiroCredits = true
 		}
+		if stu, ok := usageObj["server_tool_use"].(map[string]any); ok {
+			if v, ok := parseSSEUsageInt(stu["web_search_requests"]); ok && v > 0 {
+				patch.webSearchRequests = v
+				patch.hasWebSearchRequests = true
+			}
+		}
 		return patch
 	}
 
@@ -1309,6 +1318,9 @@ func mergeSSEUsagePatch(usage *ClaudeUsage, patch *sseUsagePatch) {
 	}
 	if patch.hasKiroCredits {
 		usage.KiroCredits = patch.kiroCredits
+	}
+	if patch.hasWebSearchRequests {
+		usage.WebSearchRequests = patch.webSearchRequests
 	}
 }
 

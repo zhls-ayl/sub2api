@@ -624,6 +624,14 @@ export default {
         codexAddRow: "Add entry",
         codexRemoveRow: "Remove",
       },
+      kiroMixedToolWebSearch: {
+        title: 'Kiro mixed-tool web search',
+        description:
+          'When a Kiro request includes web_search together with other tools, execute web_search locally and continue until the model finishes or calls another tool. Requests that contain only web_search already use the native path and do not need this switch. Default off.',
+        enabled: 'Enable mixed-tool web search',
+        enabledHint:
+          'Global default. Each Kiro group can force this on or off. Independent of Web Search Emulation.',
+      },
       webSearchEmulation: {
         title: 'Web Search Emulation',
         description: 'Inject web search capability for Anthropic API Key accounts that don\'t natively support it',

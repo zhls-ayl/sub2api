@@ -610,6 +610,9 @@ type ClaudeUsage struct {
 	CacheCreation1hTokens    int // 1小时缓存创建token（来自嵌套 cache_creation 对象）
 	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
 	KiroCredits              float64
+	// WebSearchRequests is the number of server-side web_search calls surfaced
+	// on this response. It is copied onto ForwardResult.WebSearchCalls for billing.
+	WebSearchRequests int `json:"-"`
 }
 
 // ForwardResult 转发结果
@@ -656,7 +659,10 @@ type ForwardResult struct {
 	ImageSizeSource    string
 	ImageSizeBreakdown map[string]int
 	SearchCount        int
-	AudioUsage         *AudioUsage
+	// WebSearchCalls is the Anthropic/Kiro server web_search call count billed
+	// with Group.WebSearchPricePerCall. Nil price means no surcharge.
+	WebSearchCalls int
+	AudioUsage     *AudioUsage
 	// CacheStorageTokenHours 显式上下文缓存的存储量（缓存 token 数 × 存储小时数），按计费模型的
 	// 存储单价折算为费用后叠加在 token 费用之上。
 	CacheStorageTokenHours float64

@@ -1058,6 +1058,15 @@ export default {
         typesafe: 'TypeSafe / Jev',
         composite: 'Composite',
       },
+      kiroMixedToolWebSearch: {
+        title: 'Mixed-tool web search',
+        description:
+          'Execute web_search inside requests that also contain other tools, then continue until the model finishes or calls a non-search tool. Default follows the global setting, which is off.',
+        mode: 'Group override',
+        modeDefault: 'Follow global setting',
+        modeEnabled: 'Enabled',
+        modeDisabled: 'Disabled',
+      },
       kiroCache: {
         description: 'Simulate Anthropic prompt cache usage for this Kiro group only.',
         enabled: 'Enable cache emulation',

@@ -740,6 +740,18 @@
 
         <!-- Kiro 模拟缓存配置 -->
         <div v-if="createForm.platform === 'kiro'" class="border-t pt-4">
+          <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.kiroMixedToolWebSearch.title") }}
+          </label>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t("admin.groups.kiroMixedToolWebSearch.description") }}
+          </p>
+          <label class="input-label">{{ t("admin.groups.kiroMixedToolWebSearch.mode") }}</label>
+          <select v-model="createForm.kiro_mixed_tool_web_search_mode" class="input mb-4">
+            <option value="default">{{ t("admin.groups.kiroMixedToolWebSearch.modeDefault") }}</option>
+            <option value="enabled">{{ t("admin.groups.kiroMixedToolWebSearch.modeEnabled") }}</option>
+            <option value="disabled">{{ t("admin.groups.kiroMixedToolWebSearch.modeDisabled") }}</option>
+          </select>
           <!-- 粘性路由说明 -->
           <label class="mb-4 flex items-start gap-3 rounded-md bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
             <input
@@ -2470,6 +2482,18 @@
 
         <!-- Kiro 模拟缓存配置 -->
         <div v-if="editForm.platform === 'kiro'" class="border-t pt-4">
+          <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.kiroMixedToolWebSearch.title") }}
+          </label>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t("admin.groups.kiroMixedToolWebSearch.description") }}
+          </p>
+          <label class="input-label">{{ t("admin.groups.kiroMixedToolWebSearch.mode") }}</label>
+          <select v-model="editForm.kiro_mixed_tool_web_search_mode" class="input mb-4">
+            <option value="default">{{ t("admin.groups.kiroMixedToolWebSearch.modeDefault") }}</option>
+            <option value="enabled">{{ t("admin.groups.kiroMixedToolWebSearch.modeEnabled") }}</option>
+            <option value="disabled">{{ t("admin.groups.kiroMixedToolWebSearch.modeDisabled") }}</option>
+          </select>
           <!-- 粘性路由说明 -->
           <label class="mb-4 flex items-start gap-3 rounded-md bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
             <input
@@ -5206,6 +5230,7 @@ const createForm = reactive({
   kiro_cache_creation_emulation_ratio: 1,
   kiro_cache_read_emulation_ratio: 1,
   kiro_endpoint_mode: "q" as "q" | "krs" | "auto",
+  kiro_mixed_tool_web_search_mode: "default" as "default" | "enabled" | "disabled",
 });
 
 // 简单账号类型（用于模型路由选择）
@@ -5582,6 +5607,7 @@ const editForm = reactive({
   kiro_cache_creation_emulation_ratio: 1,
   kiro_cache_read_emulation_ratio: 1,
   kiro_endpoint_mode: "q" as "q" | "krs" | "auto",
+  kiro_mixed_tool_web_search_mode: "default" as "default" | "enabled" | "disabled",
 });
 
 type ImagePricingFormState = {
@@ -6035,6 +6061,7 @@ const closeCreateModal = () => {
   createForm.kiro_cache_creation_emulation_ratio = 1;
   createForm.kiro_cache_read_emulation_ratio = 1;
   createForm.kiro_endpoint_mode = "q";
+  createForm.kiro_mixed_tool_web_search_mode = "default";
   resetModelAllowlistState(createModelAllowlistState);
   createModelRoutingRules.value = [];
 };
@@ -6281,7 +6308,13 @@ const handleCreateGroup = async () => {
           platform: createForm.platform,
         }
       : requestData;
-    await adminAPI.groups.create(payload);
+    const created = await adminAPI.groups.create(payload);
+    if (createForm.platform === "kiro") {
+      await adminAPI.settings.setKiroMixedToolWebSearchGroupMode(
+        created.id,
+        createForm.kiro_mixed_tool_web_search_mode,
+      );
+    }
     appStore.showSuccess(t("admin.groups.groupCreated"));
     closeCreateModal();
     loadGroups();
@@ -6298,6 +6331,21 @@ const handleCreateGroup = async () => {
   } finally {
     submitting.value = false;
   }
+};
+
+const loadKiroMixedToolWebSearchMode = async (
+  groupId: number,
+): Promise<"default" | "enabled" | "disabled"> => {
+  try {
+    const cfg = await adminAPI.settings.getKiroMixedToolWebSearchConfig();
+    const mode = cfg.group_modes?.[String(groupId)];
+    if (mode === "enabled" || mode === "disabled") {
+      return mode;
+    }
+  } catch {
+    // Missing config follows the global default.
+  }
+  return "default";
 };
 
 const handleEdit = async (group: AdminGroup) => {
@@ -6411,6 +6459,10 @@ editForm.max_reasoning_effort = normalizeReasoningEffortForPlatform(
     group.kiro_cache_read_emulation_ratio ?? group.kiro_cache_emulation_ratio ?? 1;
   const mode = group.kiro_endpoint_mode;
   editForm.kiro_endpoint_mode = (mode === "krs" || mode === "auto") ? mode : "q";
+  editForm.kiro_mixed_tool_web_search_mode = "default";
+  if (group.platform === "kiro") {
+    editForm.kiro_mixed_tool_web_search_mode = await loadKiroMixedToolWebSearchMode(group.id);
+  }
   resetModelAllowlistState(editModelAllowlistState, group.model_allowlist);
   // 固定账号 manifest 配置：回显配置并异步解析已存账号名称（失败显示 #<id>）
   const savedCodexManifestConfig =
@@ -6668,6 +6720,12 @@ const handleUpdateGroup = async () => {
         }
       : payload;
     await adminAPI.groups.update(editingGroup.value.id, requestData);
+    if (editForm.platform === "kiro") {
+      await adminAPI.settings.setKiroMixedToolWebSearchGroupMode(
+        editingGroup.value.id,
+        editForm.kiro_mixed_tool_web_search_mode,
+      );
+    }
     appStore.showSuccess(t("admin.groups.groupUpdated"));
     closeEditModal();
     loadGroups();

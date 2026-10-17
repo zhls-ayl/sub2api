@@ -1,6 +1,7 @@
 package kiro
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -14,22 +15,51 @@ type BufferedStreamResult struct {
 }
 
 func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchResults, startIndex int) [][]byte {
-	searchContent := make([]map[string]any, 0)
-	if results != nil {
-		for _, result := range results.Results {
-			snippet := ""
-			if result.Snippet != nil {
-				snippet = strings.TrimSpace(*result.Snippet)
-			}
-			searchContent = append(searchContent, map[string]any{
-				"type":              "web_search_result",
-				"title":             result.Title,
-				"url":               result.URL,
-				"encrypted_content": snippet,
-				"page_age":          nil,
-			})
+	return generateSearchIndicatorEvents(SearchIndicator{
+		ToolUseID: toolUseID,
+		Query:     query,
+		Results:   results,
+	}, startIndex)
+}
+
+// GenerateSearchIndicatorErrorEvents emits server_tool_use plus a
+// web_search_tool_result whose content is a web_search_tool_result_error.
+func GenerateSearchIndicatorErrorEvents(query, toolUseID, errorCode string, startIndex int) [][]byte {
+	return generateSearchIndicatorEvents(SearchIndicator{
+		ToolUseID: toolUseID,
+		Query:     query,
+		ErrorCode: errorCode,
+	}, startIndex)
+}
+
+func generateSearchIndicatorEvents(search SearchIndicator, startIndex int) [][]byte {
+	var searchContent any
+	if strings.TrimSpace(search.ErrorCode) != "" {
+		searchContent = map[string]any{
+			"type":       "web_search_tool_result_error",
+			"error_code": strings.TrimSpace(search.ErrorCode),
 		}
+	} else {
+		items := make([]map[string]any, 0)
+		if search.Results != nil {
+			for _, result := range search.Results.Results {
+				snippet := ""
+				if result.Snippet != nil {
+					snippet = strings.TrimSpace(*result.Snippet)
+				}
+				items = append(items, map[string]any{
+					"type":              "web_search_result",
+					"title":             result.Title,
+					"url":               result.URL,
+					"encrypted_content": snippet,
+					"page_age":          nil,
+				})
+			}
+		}
+		searchContent = items
 	}
+	query := search.Query
+	toolUseID := search.ToolUseID
 
 	inputJSON, _ := json.Marshal(map[string]string{"query": query})
 
@@ -165,14 +195,71 @@ func AnalyzeBufferedStream(chunks [][]byte) BufferedStreamResult {
 }
 
 func FilterChunksForClient(chunks [][]byte, webSearchToolUseIndex, indexOffset int) [][]byte {
+	return FilterChunksDroppingIndices(chunks, []int{webSearchToolUseIndex}, indexOffset)
+}
+
+// FilterChunksDroppingIndices forwards a buffered turn minus message envelope
+// events and the tool_use blocks at the given indices. Remaining content block
+// indices are shifted by indexOffset.
+func FilterChunksDroppingIndices(chunks [][]byte, toolIndices []int, indexOffset int) [][]byte {
+	drop := map[int]struct{}{}
+	for _, idx := range toolIndices {
+		if idx >= 0 {
+			drop[idx] = struct{}{}
+		}
+	}
 	filtered := make([][]byte, 0, len(chunks))
 	for _, chunk := range chunks {
-		adjusted, shouldForward := filterSSEChunk(chunk, webSearchToolUseIndex, indexOffset)
+		adjusted, shouldForward := filterSSEChunkDrop(chunk, drop, indexOffset)
 		if shouldForward {
 			filtered = append(filtered, adjusted)
 		}
 	}
 	return filtered
+}
+
+// RenameRemoteWebSearchInSSEChunk rewrites tool_use names in one SSE chunk so
+// the client sees web_search rather than the upstream alias remote_web_search.
+func RenameRemoteWebSearchInSSEChunk(chunk []byte) []byte {
+	if len(chunk) == 0 || !bytes.Contains(chunk, []byte("remote_web_search")) {
+		return chunk
+	}
+	lines := strings.Split(string(chunk), "\n")
+	changed := false
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			continue
+		}
+		block, ok := event["content_block"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if getInterfaceString(block["type"]) != "tool_use" {
+			continue
+		}
+		if !strings.EqualFold(getInterfaceString(block["name"]), "remote_web_search") {
+			continue
+		}
+		block["name"] = "web_search"
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			continue
+		}
+		lines[i] = "data: " + string(encoded)
+		changed = true
+	}
+	if !changed {
+		return chunk
+	}
+	return []byte(strings.Join(lines, "\n"))
 }
 
 func AdjustSSEChunk(chunk []byte, offset int) ([]byte, bool) {
@@ -207,6 +294,14 @@ func MaxContentBlockIndex(chunks [][]byte) int {
 }
 
 func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byte, bool) {
+	drop := map[int]struct{}{}
+	if webSearchToolUseIndex >= 0 {
+		drop[webSearchToolUseIndex] = struct{}{}
+	}
+	return filterSSEChunkDrop(chunk, drop, indexOffset)
+}
+
+func filterSSEChunkDrop(chunk []byte, drop map[int]struct{}, indexOffset int) ([]byte, bool) {
 	lines := strings.Split(string(chunk), "\n")
 	var builder strings.Builder
 	hasContent := false
@@ -216,7 +311,7 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 		if strings.HasPrefix(line, "event: ") {
 			if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "data: ") {
 				payload := strings.TrimSpace(strings.TrimPrefix(lines[i+1], "data: "))
-				if shouldSuppressEventPayload(payload, webSearchToolUseIndex) {
+				if shouldSuppressEventPayloadSet(payload, drop) {
 					i++
 					continue
 				}
@@ -231,7 +326,7 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 			if payload == "[DONE]" {
 				continue
 			}
-			if shouldSuppressEventPayload(payload, webSearchToolUseIndex) {
+			if shouldSuppressEventPayloadSet(payload, drop) {
 				continue
 			}
 			adjusted := adjustEventPayload(payload, indexOffset)
@@ -256,6 +351,14 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 }
 
 func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool {
+	drop := map[int]struct{}{}
+	if webSearchToolUseIndex >= 0 {
+		drop[webSearchToolUseIndex] = struct{}{}
+	}
+	return shouldSuppressEventPayloadSet(payload, drop)
+}
+
+func shouldSuppressEventPayloadSet(payload string, drop map[int]struct{}) bool {
 	if payload == "" {
 		return false
 	}
@@ -271,11 +374,12 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool 
 	if eventType == "message_start" || eventType == "message_delta" || eventType == "message_stop" {
 		return true
 	}
-	if webSearchToolUseIndex < 0 {
+	if len(drop) == 0 {
 		return false
 	}
-	if idx, ok := event["index"].(float64); ok && int(idx) == webSearchToolUseIndex {
-		return true
+	if idx, ok := event["index"].(float64); ok {
+		_, dropped := drop[int(idx)]
+		return dropped
 	}
 	return false
 }

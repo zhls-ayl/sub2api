@@ -58,6 +58,9 @@ type SearchIndicator struct {
 	ToolUseID string
 	Query     string
 	Results   *WebSearchResults
+	// ErrorCode, when set, is surfaced as a web_search_tool_result_error
+	// (unavailable or too_many_requests) instead of an empty result list.
+	ErrorCode string
 }
 
 func GetCachedWebSearchDescription() string {
@@ -255,7 +258,7 @@ func InjectSearchIndicatorsInResponse(responsePayload []byte, searches []SearchI
 		})
 		updated = append(updated, map[string]any{
 			"type":    "web_search_tool_result",
-			"content": buildSearchResultContent(search.Results),
+			"content": searchResultContent(search),
 		})
 	}
 	updated = append(updated, content...)
@@ -266,6 +269,103 @@ func InjectSearchIndicatorsInResponse(responsePayload []byte, searches []SearchI
 		return responsePayload, err
 	}
 	return encoded, nil
+}
+
+// InjectWebSearchToolResults appends one assistant tool_use message and one
+// user tool_result message covering every executed web_search in the turn.
+func InjectWebSearchToolResults(claudePayload []byte, searches []SearchIndicator) ([]byte, error) {
+	if len(searches) == 0 {
+		return claudePayload, nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(claudePayload, &payload); err != nil {
+		return claudePayload, fmt.Errorf("parse claude payload: %w", err)
+	}
+	rawMessages, ok := payload["messages"].([]any)
+	if !ok {
+		return claudePayload, fmt.Errorf("claude payload missing messages array")
+	}
+	assistantContent := make([]any, 0, len(searches))
+	userContent := make([]any, 0, len(searches)+1)
+	for _, search := range searches {
+		if strings.TrimSpace(search.ErrorCode) != "" {
+			continue
+		}
+		assistantContent = append(assistantContent, map[string]any{
+			"type":  "tool_use",
+			"id":    search.ToolUseID,
+			"name":  "web_search",
+			"input": map[string]any{"query": search.Query},
+		})
+		userContent = append(userContent, map[string]any{
+			"type":        "tool_result",
+			"tool_use_id": search.ToolUseID,
+			"content":     formatToolResultText(search.Results),
+		})
+	}
+	if len(assistantContent) == 0 {
+		return claudePayload, nil
+	}
+	if guidance := searchGuidanceText(); guidance != "" {
+		userContent = append(userContent, map[string]any{
+			"type": "text",
+			"text": guidance,
+		})
+	}
+	rawMessages = append(rawMessages,
+		map[string]any{"role": "assistant", "content": assistantContent},
+		map[string]any{"role": "user", "content": userContent},
+	)
+	payload["messages"] = rawMessages
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		return claudePayload, fmt.Errorf("marshal updated payload: %w", err)
+	}
+	return updated, nil
+}
+
+// RenameRemoteWebSearchToolUses rewrites client-visible tool_use names from the
+// Kiro upstream alias remote_web_search back to web_search. server_tool_use
+// blocks are left unchanged.
+func RenameRemoteWebSearchToolUses(responsePayload []byte) []byte {
+	var response map[string]any
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return responsePayload
+	}
+	content, _ := response["content"].([]any)
+	changed := false
+	for _, block := range content {
+		item, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		if getInterfaceString(item["type"]) != "tool_use" {
+			continue
+		}
+		if !strings.EqualFold(getInterfaceString(item["name"]), "remote_web_search") {
+			continue
+		}
+		item["name"] = "web_search"
+		changed = true
+	}
+	if !changed {
+		return responsePayload
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return responsePayload
+	}
+	return encoded
+}
+
+func searchResultContent(search SearchIndicator) any {
+	if code := strings.TrimSpace(search.ErrorCode); code != "" {
+		return map[string]any{
+			"type":       "web_search_tool_result_error",
+			"error_code": code,
+		}
+	}
+	return buildSearchResultContent(search.Results)
 }
 
 func buildSearchResultContent(results *WebSearchResults) []map[string]any {
@@ -309,6 +409,12 @@ func ExtractWebSearchToolUseFromResponse(responsePayload []byte) (toolUseID, que
 		return block.Get("id").String(), query, true
 	}
 	return "", "", false
+}
+
+// IsWebSearchToolName reports whether a tool name or type is the Anthropic
+// server web_search tool, including the Kiro upstream alias remote_web_search.
+func IsWebSearchToolName(name, toolType string) bool {
+	return isWebSearchToolName(name, toolType)
 }
 
 func isWebSearchToolName(name, toolType string) bool {

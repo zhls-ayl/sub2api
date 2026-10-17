@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 )
 
 const kiroMaxWebSearchIterations = 5
@@ -21,9 +23,10 @@ var (
 )
 
 type kiroWebSearchExecution struct {
-	ResponseBody []byte
-	Usage        ClaudeUsage
-	RequestID    string
+	ResponseBody   []byte
+	Usage          ClaudeUsage
+	RequestID      string
+	WebSearchCalls int
 }
 
 type kiroWebSearchHTTPError struct {
@@ -62,24 +65,28 @@ func bufferKiroAnthropicStream(ctx context.Context, body io.Reader, responseMode
 // message_start/message_delta/message_stop; without a replacement message_delta
 // and message_stop, handleStreamingResponse reports "missing terminal event"
 // and the request is not billed.
-func writeKiroWebSearchFinalRound(w io.Writer, chunks [][]byte, indexOffset int, result *kiropkg.StreamResult) error {
+func writeKiroWebSearchFinalRound(w io.Writer, chunks [][]byte, indexOffset int, result *kiropkg.StreamResult, webSearchRequests int, renameRemoteWebSearch bool) error {
 	for _, chunk := range chunks {
 		adjusted, shouldForward := kiropkg.AdjustSSEChunk(chunk, indexOffset)
 		if !shouldForward {
 			continue
 		}
+		if renameRemoteWebSearch {
+			adjusted = kiropkg.RenameRemoteWebSearchInSSEChunk(adjusted)
+		}
 		if _, err := w.Write(adjusted); err != nil {
 			return err
 		}
 	}
-	return writeKiroWebSearchStreamTermination(w, result)
+	return writeKiroWebSearchStreamTermination(w, result, webSearchRequests)
 }
 
 // writeKiroWebSearchStreamTermination emits the client-visible end of a Kiro
 // web-search stream. output_tokens and credits come from the parsed upstream
-// turn. input_tokens are omitted so the cache-adjusted values already sent in
-// message_start are not replaced by the raw upstream count.
-func writeKiroWebSearchStreamTermination(w io.Writer, result *kiropkg.StreamResult) error {
+// turn (summed across search rounds). input_tokens are omitted so the
+// cache-adjusted values already sent in message_start are not replaced by the
+// raw upstream count.
+func writeKiroWebSearchStreamTermination(w io.Writer, result *kiropkg.StreamResult, webSearchRequests int) error {
 	stopReason := "end_turn"
 	outputTokens := 0
 	credits := 0.0
@@ -92,6 +99,11 @@ func writeKiroWebSearchStreamTermination(w io.Writer, result *kiropkg.StreamResu
 	}
 	usage := map[string]any{
 		"output_tokens": outputTokens,
+	}
+	if webSearchRequests > 0 {
+		usage["server_tool_use"] = map[string]any{
+			"web_search_requests": webSearchRequests,
+		}
 	}
 	if credits > 0 {
 		usage["_sub2api_kiro_credits"] = credits
@@ -167,7 +179,39 @@ func writeAnthropicMessageStart(w io.Writer, msgID, model string, inputTokens in
 }
 
 func (s *GatewayService) streamKiroWebSearchAsAnthropic(
-	ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, plan *kiroCacheEmulationPlan,
+	ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, plan *kiroCacheEmulationPlan, enhanced bool,
+) error {
+	client := s.newGatewayKiroRoundClient(account, nil, token, mappedModel, requestModel, headers, inputTokens, anthropicBody, plan)
+	client.enhanced = enhanced
+	var cacheUsage *kiroCacheEmulationUsage
+	if plan != nil {
+		cacheUsage = plan.result()
+	}
+	return runKiroOnlyWebSearchStream(ctx, client, client.prefetch, anthropicBody, requestModel, inputTokens, w, cacheUsage, enhanced)
+}
+
+func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, enhanced bool) (*kiroWebSearchExecution, error) {
+	inputTokens := estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), anthropicBody)
+	client := s.newGatewayKiroRoundClient(account, group, token, mappedModel, requestModel, headers, inputTokens, anthropicBody, nil)
+	client.enhanced = enhanced
+	return runKiroOnlyWebSearchNonStream(ctx, client, client.prefetch, anthropicBody, requestModel, inputTokens, enhanced)
+}
+
+// runKiroOnlyWebSearchStream is the only-web_search streaming loop.
+// enhanced gates behavior added for the mixed-tool switch: MCP failures become
+// tool_result errors, rounds share a deadline, output and credits accumulate,
+// and web_search calls are counted. With enhanced off, the loop matches the
+// original only-web_search stream plus the terminal message_delta/message_stop.
+func runKiroOnlyWebSearchStream(
+	ctx context.Context,
+	client kiroRoundClient,
+	prefetch func(context.Context),
+	anthropicBody []byte,
+	requestModel string,
+	inputTokens int,
+	w io.Writer,
+	cacheUsage *kiroCacheEmulationUsage,
+	enhanced bool,
 ) error {
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
@@ -181,23 +225,51 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 	currentToolUseID := "srvtoolu_" + kiropkg.GenerateToolUseID()
 	nextContentBlockIndex := 0
 
-	if err := writeAnthropicMessageStart(w, "", requestModel, inputTokens, plan.result()); err != nil {
+	loopCtx, cancelLoop := kiroWebSearchLoopContext(ctx, enhanced)
+	defer cancelLoop()
+
+	if err := writeAnthropicMessageStart(w, "", requestModel, inputTokens, cacheUsage); err != nil {
 		return err
 	}
 
-	for iteration := 0; iteration < kiroMaxWebSearchIterations; iteration++ {
-		s.prefetchKiroWebSearchDescription(ctx, account, token)
+	var accUsage kiropkg.Usage
+	accStop := ""
+	executedSearches := 0
 
-		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query)
-		if strings.TrimSpace(nextToken) != "" {
-			token = nextToken
+	for iteration := 0; iteration < kiroMaxWebSearchIterations; iteration++ {
+		if err := loopCtx.Err(); err != nil {
+			return err
+		}
+		if prefetch != nil {
+			prefetch(loopCtx)
+		}
+
+		results, mcpErr := client.search(loopCtx, query)
+		if mcpErr != nil && !enhanced {
+			results = nil
+			mcpErr = nil
 		}
 		if mcpErr != nil {
-			results = nil
+			if hard := kiroWebSearchHardError(mcpErr); hard != nil {
+				return hard
+			}
+			code := kiroWebSearchToolErrorCode(mcpErr)
+			logger.L().Warn("kiro web search mcp failed",
+				zap.String("error_code", code),
+				zap.Error(mcpErr),
+			)
+			if err := writeSSEChunks(w, kiropkg.GenerateSearchIndicatorErrorEvents(query, currentToolUseID, code, nextContentBlockIndex)); err != nil {
+				return err
+			}
+			executedSearches++
+			return writeKiroWebSearchStreamTermination(w, &kiropkg.StreamResult{Usage: accUsage, StopReason: accStop}, executedSearches)
 		}
 
 		if err := writeSSEChunks(w, kiropkg.GenerateSearchIndicatorEvents(query, currentToolUseID, results, nextContentBlockIndex)); err != nil {
 			return err
+		}
+		if enhanced {
+			executedSearches++
 		}
 		nextContentBlockIndex += 2
 
@@ -206,24 +278,37 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			return errKiroWebSearchFallback
 		}
 
-		resp, _, err := s.executeKiroUpstream(ctx, account, currentBody, mappedModel, requestModel, token, headers)
+		round, err := client.complete(loopCtx, currentBody, true, iteration)
 		if err != nil {
+			if enhanced && iteration > 0 {
+				logger.L().Warn("kiro web search upstream failed after first round", zap.Error(err))
+				calls := executedSearches
+				return writeKiroWebSearchStreamTermination(w, &kiropkg.StreamResult{Usage: accUsage, StopReason: accStop}, calls)
+			}
 			return err
 		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return &kiroWebSearchHTTPError{Response: resp}
+		if round != nil && round.HTTPErr != nil {
+			if enhanced && iteration > 0 {
+				status := 0
+				if round.HTTPErr.Response != nil {
+					status = round.HTTPErr.Response.StatusCode
+					_ = round.HTTPErr.Response.Body.Close()
+				}
+				logger.L().Warn("kiro web search upstream status failed after first round", zap.Int("status", status))
+				return writeKiroWebSearchStreamTermination(w, &kiropkg.StreamResult{Usage: accUsage, StopReason: accStop}, executedSearches)
+			}
+			return round.HTTPErr
 		}
-		if iteration == 0 {
-			// 首轮请求已确认成功，此时提交缓存前缀落盘才是安全的。
-			plan.commit()
+		if round == nil {
+			return fmt.Errorf("kiro web search empty round")
 		}
-
-		chunks, streamResult, streamErr := func() ([][]byte, *kiropkg.StreamResult, error) {
-			defer func() { _ = resp.Body.Close() }()
-			return bufferKiroAnthropicStream(ctx, resp.Body, requestModel, inputTokens)
-		}()
-		if streamErr != nil {
-			return streamErr
+		chunks := round.Chunks
+		var visible *kiropkg.StreamResult
+		if enhanced {
+			absorbKiroStreamRound(&accUsage, &accStop, round.Stream)
+			visible = &kiropkg.StreamResult{Usage: accUsage, StopReason: accStop}
+		} else {
+			visible = round.Stream
 		}
 
 		analysis := kiropkg.AnalyzeBufferedStream(chunks)
@@ -244,13 +329,25 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			continue
 		}
 
-		return writeKiroWebSearchFinalRound(w, chunks, nextContentBlockIndex, streamResult)
+		calls := 0
+		if enhanced {
+			calls = executedSearches
+		}
+		return writeKiroWebSearchFinalRound(w, chunks, nextContentBlockIndex, visible, calls, enhanced)
 	}
 
 	return fmt.Errorf("kiro web search exceeded max iterations")
 }
 
-func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*kiroWebSearchExecution, error) {
+func runKiroOnlyWebSearchNonStream(
+	ctx context.Context,
+	client kiroRoundClient,
+	prefetch func(context.Context),
+	anthropicBody []byte,
+	requestModel string,
+	inputTokens int,
+	enhanced bool,
+) (*kiroWebSearchExecution, error) {
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
 		return nil, errKiroWebSearchFallback
@@ -261,22 +358,48 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 		currentBody = anthropicBody
 	}
 
-	inputTokens := estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), anthropicBody)
+	loopCtx, cancelLoop := kiroWebSearchLoopContext(ctx, enhanced)
+	defer cancelLoop()
+
 	currentToolUseID := "srvtoolu_" + kiropkg.GenerateToolUseID()
 	searches := make([]kiropkg.SearchIndicator, 0, 2)
 	requestID := ""
-	var cacheUsage *kiroCacheEmulationUsage
-	cacheUsageResolved := false
+	var accUsage kiropkg.Usage
 
 	for iteration := 0; iteration < kiroMaxWebSearchIterations; iteration++ {
-		s.prefetchKiroWebSearchDescription(ctx, account, token)
+		if err := loopCtx.Err(); err != nil {
+			return nil, err
+		}
+		if prefetch != nil {
+			prefetch(loopCtx)
+		}
 
-		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query)
-		if strings.TrimSpace(nextToken) != "" {
-			token = nextToken
+		results, mcpErr := client.search(loopCtx, query)
+		if mcpErr != nil && !enhanced {
+			results = nil
+			mcpErr = nil
 		}
 		if mcpErr != nil {
-			results = nil
+			if hard := kiroWebSearchHardError(mcpErr); hard != nil {
+				return nil, hard
+			}
+			code := kiroWebSearchToolErrorCode(mcpErr)
+			logger.L().Warn("kiro web search mcp failed",
+				zap.String("error_code", code),
+				zap.Error(mcpErr),
+			)
+			searches = append(searches, kiropkg.SearchIndicator{
+				ToolUseID: currentToolUseID,
+				Query:     query,
+				ErrorCode: code,
+			})
+			usage := kiroUsageToClaude(accUsage, inputTokens)
+			return &kiroWebSearchExecution{
+				ResponseBody:   kiroWebSearchClientMessage(requestModel, usage, searches, nil),
+				Usage:          usage,
+				RequestID:      requestID,
+				WebSearchCalls: len(searches),
+			}, nil
 		}
 		searches = append(searches, kiropkg.SearchIndicator{
 			ToolUseID: currentToolUseID,
@@ -289,43 +412,46 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 			return nil, errKiroWebSearchFallback
 		}
 
-		resp, _, err := s.executeKiroUpstream(ctx, account, currentBody, mappedModel, requestModel, token, headers)
+		round, err := client.complete(loopCtx, currentBody, false, iteration)
 		if err != nil {
+			if enhanced && iteration > 0 && !kiroWebSearchIsLaterRound(err) {
+				return nil, kiroWebSearchLaterRoundError(err)
+			}
 			return nil, err
 		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, &kiroWebSearchHTTPError{Response: resp}
+		if round != nil && round.HTTPErr != nil {
+			return nil, round.HTTPErr
 		}
-
-		parseResult, parseErr := func() (*kiropkg.ParseResult, error) {
-			defer func() { _ = resp.Body.Close() }()
-			if !cacheUsageResolved {
-				cacheUsage = s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
-				cacheUsageResolved = true
-			}
-			return kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, requestModel, kiropkg.KiroRequestContext{
-				CacheEmulationUsage:  cacheUsage.toKiroUsage(),
-				EstimatedInputTokens: inputTokens,
-				TokenizerAlgorithm:    s.kiroMeteringAlgorithm(ctx),
-			})
-		}()
-		if parseErr != nil {
-			return nil, parseErr
+		if round == nil {
+			return nil, fmt.Errorf("kiro web search empty round")
 		}
 		if requestID == "" {
-			requestID = buildKiroRequestID(resp)
+			requestID = round.RequestID
+		}
+		var usage kiropkg.Usage
+		if enhanced {
+			mergeKiroRoundUsage(&accUsage, round.Usage)
+			usage = accUsage
+		} else {
+			usage = round.Usage
 		}
 
-		nextToolUseID, nextQuery, hasNext := kiropkg.ExtractWebSearchToolUseFromResponse(parseResult.ResponseBody)
+		nextToolUseID, nextQuery, hasNext := kiropkg.ExtractWebSearchToolUseFromResponse(round.Body)
 		if !hasNext || strings.TrimSpace(nextQuery) == "" || iteration+1 >= kiroMaxWebSearchIterations {
-			finalBody, injectErr := kiropkg.InjectSearchIndicatorsInResponse(parseResult.ResponseBody, searches)
-			if injectErr == nil {
-				parseResult.ResponseBody = finalBody
+			claudeUsage := kiroUsageToClaude(usage, inputTokens)
+			body := round.Body
+			calls := 0
+			if enhanced {
+				body = kiroWebSearchClientMessage(requestModel, claudeUsage, searches, round.Body)
+				calls = len(searches)
+			} else if injected, injectErr := kiropkg.InjectSearchIndicatorsInResponse(round.Body, searches); injectErr == nil {
+				body = injected
 			}
 			return &kiroWebSearchExecution{
-				ResponseBody: parseResult.ResponseBody,
-				Usage:        kiroUsageToClaude(parseResult.Usage, inputTokens),
-				RequestID:    requestID,
+				ResponseBody:   body,
+				Usage:          claudeUsage,
+				RequestID:      requestID,
+				WebSearchCalls: calls,
 			}, nil
 		}
 
