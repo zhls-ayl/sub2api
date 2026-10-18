@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -90,6 +92,11 @@ func newWSBridgeTestServerWithOptions(t *testing.T, opts wsBridgeTestServerOptio
 					time.Sleep(srv.opts.delay)
 				}
 				if err := conn.WriteMessage(websocket.TextMessage, []byte(event)); err != nil {
+					// 首输出超时会在 delay 结束前关掉上游。对端已断开是这条路径的预期结果；
+					// 子测试返回后再 t.Errorf 会把父测试标失败，并在已结束的测试上 panic。
+					if wsBridgePeerClosed(err) || t.Context().Err() != nil {
+						return
+					}
 					t.Errorf("write ws event failed: %v", err)
 					return
 				}
@@ -98,6 +105,18 @@ func newWSBridgeTestServerWithOptions(t *testing.T, opts wsBridgeTestServerOptio
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// wsBridgePeerClosed 报告写出失败是否因为客户端已经关掉连接。
+func wsBridgePeerClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	var closeErr *websocket.CloseError
+	return errors.As(err, &closeErr)
 }
 
 func newWSBridgeTestConfig() *config.Config {
