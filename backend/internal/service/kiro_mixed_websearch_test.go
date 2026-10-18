@@ -873,3 +873,21 @@ func (r *mapSettingRepo) GetAll(context.Context) (map[string]string, error) {
 	return map[string]string{}, nil
 }
 func (r *mapSettingRepo) Delete(context.Context, string) error { return nil }
+
+// runKiroMixedStream is a unit-test helper. Production opens the first Kiro
+// round in openKiroMixedToolWebSearchStream so a first-round HTTP error is
+// returned before the response pipe starts, then continues with
+// continueKiroMixedStream. These tests drive the whole stream from one call.
+func runKiroMixedStream(ctx context.Context, client kiroRoundClient, w io.Writer, body []byte, requestModel string, inputTokens int, cacheUsage *kiroCacheEmulationUsage) error {
+	round, err := client.complete(ctx, body, true, 0)
+	if err != nil {
+		return err
+	}
+	if round != nil && round.HTTPErr != nil {
+		return round.HTTPErr
+	}
+	if err := writeAnthropicMessageStart(w, "", requestModel, inputTokens, cacheUsage); err != nil {
+		return err
+	}
+	return continueKiroMixedStream(ctx, client, w, body, round, inputTokens)
+}

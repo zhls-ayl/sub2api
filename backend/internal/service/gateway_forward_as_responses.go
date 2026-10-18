@@ -95,9 +95,8 @@ func (s *GatewayService) ForwardAsResponses(
 	anthropicReq.Stream = true
 	reqStream := true
 
-	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body, mappedModel, originalModel)
-	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 mapping 完成之后。
-	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
+	// effort is taken from the body that is actually forwarded, not the pre-conversion request.
+	var reasoningEffort *string
 
 	// 4b. Codex remote compaction v2：input 里带 compaction_trigger 的请求不是普通
 	// 轮次，而是"把前文压缩成摘要"。Anthropic 协议族没有原生 compact 端点，转换器

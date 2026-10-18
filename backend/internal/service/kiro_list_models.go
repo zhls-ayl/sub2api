@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -66,31 +67,8 @@ func kiroListedModelFrom(id string, limits kiroModelTokenLimits) (kiroListedMode
 	}, true
 }
 
-func kiroListedModelIDs(models []kiroListedModel) []string {
-	if len(models) == 0 {
-		return nil
-	}
-	ids := make([]string, 0, len(models))
-	for _, model := range models {
-		id := strings.TrimSpace(model.ID)
-		if id == "" {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	return ids
-}
-
-// kiroListAvailableModelIDs 调用 GET https://q.{region}.amazonaws.com/ListAvailableModels。
+// kiroListAvailableModels 调用 GET https://q.{region}.amazonaws.com/ListAvailableModels。
 // 账号区域返回 403 时，us-east-1 再试 eu-central-1，eu-central-1 再试 us-east-1。最多翻 10 页。
-func kiroListAvailableModelIDs(ctx context.Context, account *Account, token string) ([]string, error) {
-	models, err := kiroListAvailableModels(ctx, account, token)
-	if err != nil {
-		return nil, err
-	}
-	return kiroListedModelIDs(models), nil
-}
-
 func kiroListAvailableModels(ctx context.Context, account *Account, token string) ([]kiroListedModel, error) {
 	return kiroListAvailableModelsWithDo(ctx, account, token, kiroModelsHTTPDo(account))
 }
@@ -105,16 +83,8 @@ func kiroModelsHTTPDo(account *Account) kiroModelsDoFunc {
 		if err != nil {
 			return nil, err
 		}
-		return client.Do(req)
+		return client.Do(req) //nolint:gosec // G704: validateKiroListModelsEndpoint allowlists scheme, host, path, and port before NewRequest
 	}
-}
-
-func kiroListAvailableModelIDsWithDo(ctx context.Context, account *Account, token string, do kiroModelsDoFunc) ([]string, error) {
-	models, err := kiroListAvailableModelsWithDo(ctx, account, token, do)
-	if err != nil {
-		return nil, err
-	}
-	return kiroListedModelIDs(models), nil
 }
 
 func kiroListAvailableModelsWithDo(ctx context.Context, account *Account, token string, do kiroModelsDoFunc) ([]kiroListedModel, error) {
@@ -203,6 +173,9 @@ func buildKiroListModelsRequest(ctx context.Context, account *Account, token, re
 		query.Set("nextToken", tokenValue)
 	}
 	endpoint := fmt.Sprintf("https://q.%s.amazonaws.com/ListAvailableModels?%s", region, query.Encode())
+	if err := validateKiroListModelsEndpoint(endpoint); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create list models request: %w", err)
@@ -230,6 +203,35 @@ func buildKiroListModelsRequest(ctx context.Context, account *Account, token, re
 	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.NewString())
 	applyKiroConditionalHeaders(req, account)
 	return req, nil
+}
+
+// kiroListModelsHostPattern matches the CodeWhisperer ListAvailableModels host
+// we build ourselves: https://q.{region}.amazonaws.com. Region is account
+// config or a known fallback, but it is still interpolated, so the request is
+// refused unless the parsed URL stays on that host.
+var kiroListModelsHostPattern = regexp.MustCompile(`(?i)^q\.[A-Za-z0-9-]+\.amazonaws\.com$`)
+
+func validateKiroListModelsEndpoint(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid kiro list models endpoint: %w", err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return fmt.Errorf("kiro list models endpoint must use https")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("kiro list models endpoint must not include userinfo")
+	}
+	if !kiroListModelsHostPattern.MatchString(parsed.Hostname()) {
+		return fmt.Errorf("kiro list models endpoint host %q is not a known Kiro endpoint", parsed.Hostname())
+	}
+	if parsed.EscapedPath() != "/ListAvailableModels" {
+		return fmt.Errorf("kiro list models endpoint path %q is not allowed", parsed.EscapedPath())
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return fmt.Errorf("kiro list models endpoint port %q is not allowed", port)
+	}
+	return nil
 }
 
 func (s *AccountTestService) fetchKiroDirectUpstreamModels(ctx context.Context, account *Account) ([]string, error) {
@@ -338,12 +340,6 @@ func (s *AccountTestService) kiroSyncAccessToken(ctx context.Context, account *A
 		return "", newUpstreamModelSyncConfigError("No Kiro access token is available", nil)
 	}
 	return token, nil
-}
-
-// kiroSyncPublicModelNames 把上游 modelId 展开成对外名。Claude 紧跟一行 -thinking。
-func kiroSyncPublicModelNames(ids []string) []string {
-	names, _ := kiroPublicCatalog(ids)
-	return names
 }
 
 // kiroPublicCatalog 展开对外名，并在 metadata 里记下原始 modelId。

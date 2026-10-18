@@ -56,7 +56,11 @@ func NewClient(opts Options) *Client {
 	transport := http.DefaultTransport
 	if opts.ProxyURL != "" {
 		if parsed, err := url.Parse(opts.ProxyURL); err == nil {
-			proxyTransport := http.DefaultTransport.(*http.Transport).Clone()
+			base, ok := http.DefaultTransport.(*http.Transport)
+			if !ok {
+				panic("net/http: DefaultTransport is not *http.Transport")
+			}
+			proxyTransport := base.Clone()
 			proxyTransport.Proxy = http.ProxyURL(parsed)
 			transport = proxyTransport
 		}
@@ -114,7 +118,7 @@ func (c *Client) RefreshSession(ctx context.Context, rawCookie string) (*Session
 	if err != nil {
 		return nil, wrapNetworkError("get-session request failed", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, wrapNetworkError("read get-session response", err)
@@ -201,7 +205,7 @@ func (c *Client) doGraphQL(ctx context.Context, jwt, operationName string, varia
 	if err != nil {
 		return nil, wrapNetworkError(fmt.Sprintf("%s request failed", operationName), err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, wrapNetworkError(fmt.Sprintf("read %s response", operationName), err)
@@ -313,7 +317,7 @@ func (c *Client) DownloadImage(ctx context.Context, url string) ([]byte, error) 
 	if err != nil {
 		return nil, wrapNetworkError("image download failed", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, NewUpstreamTemporaryError(fmt.Sprintf("image download returned %d", resp.StatusCode), resp.StatusCode)
 	}

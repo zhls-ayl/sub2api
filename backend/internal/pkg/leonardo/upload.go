@@ -80,9 +80,6 @@ func (c *Client) PostToPresignedURL(ctx context.Context, targetURL, fieldsJSON s
 	if len(fields) == 0 {
 		return NewRequestError("upload fields were empty")
 	}
-	if contentType == "" {
-		contentType = "image/jpeg"
-	}
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -111,7 +108,7 @@ func (c *Client) PostToPresignedURL(ctx context.Context, targetURL, fieldsJSON s
 	if err != nil {
 		return wrapNetworkError("presigned upload failed", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := fmt.Sprintf("presigned upload returned %d", resp.StatusCode)
