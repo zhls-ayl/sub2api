@@ -647,20 +647,6 @@ func runKiroMixedNonStream(ctx context.Context, client kiroRoundClient, body []b
 	return nil, fmt.Errorf("kiro web search exceeded max iterations")
 }
 
-func runKiroMixedStream(ctx context.Context, client kiroRoundClient, w io.Writer, body []byte, requestModel string, inputTokens int, cacheUsage *kiroCacheEmulationUsage) error {
-	round, err := client.complete(ctx, body, true, 0)
-	if err != nil {
-		return err
-	}
-	if round != nil && round.HTTPErr != nil {
-		return round.HTTPErr
-	}
-	if err := writeAnthropicMessageStart(w, "", requestModel, inputTokens, cacheUsage); err != nil {
-		return err
-	}
-	return continueKiroMixedStream(ctx, client, w, body, round, inputTokens)
-}
-
 func continueKiroMixedStream(ctx context.Context, client kiroRoundClient, w io.Writer, body []byte, first *kiroModelRound, inputTokens int) error {
 	current := body
 	var accUsage kiropkg.Usage

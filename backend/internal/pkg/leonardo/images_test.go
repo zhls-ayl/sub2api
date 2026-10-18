@@ -173,10 +173,14 @@ func TestBuildImageRequestTextToImage(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if _, ok := decoded["parameters"].(map[string]any)["width"]; !ok {
+	parameters, ok := decoded["parameters"].(map[string]any)
+	if !ok {
+		t.Fatal("parameters missing")
+	}
+	if _, ok := parameters["width"]; !ok {
 		t.Fatal("parameters.width missing")
 	}
-	if _, ok := decoded["parameters"].(map[string]any)["guidances"]; ok {
+	if _, ok := parameters["guidances"]; ok {
 		t.Fatal("guidances should be omitted for text-to-image")
 	}
 }

@@ -298,12 +298,12 @@ func parseOpsErrorStatusCodes(raw string) ([]int, error) {
 		}
 		code, err := strconv.Atoi(value)
 		if err != nil || code < 0 {
-			return nil, fmt.Errorf("Invalid status_codes")
+			return nil, fmt.Errorf("Invalid status_codes") //nolint:staticcheck // ST1005: this string is the admin API error body; sibling handlers return the same text
 		}
 		codes = append(codes, code)
 	}
 	if len(codes) == 0 {
-		return nil, fmt.Errorf("Invalid status_codes")
+		return nil, fmt.Errorf("Invalid status_codes") //nolint:staticcheck // ST1005: this string is the admin API error body; sibling handlers return the same text
 	}
 	return codes, nil
 }

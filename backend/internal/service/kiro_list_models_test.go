@@ -37,8 +37,9 @@ func TestKiroListAvailableModelsPaginatesAndUsesProfileArn(t *testing.T) {
 		}, nil
 	}
 
-	ids, err := kiroListAvailableModelIDsWithDo(context.Background(), account, "token", do)
+	listed, err := kiroListAvailableModelsWithDo(context.Background(), account, "token", do)
 	require.NoError(t, err)
+	ids := listedKiroModelIDs(listed)
 	require.Equal(t, []string{"claude-opus-5.5", "gpt-5.6-sol"}, ids)
 	require.Len(t, requests, 2)
 
@@ -54,8 +55,8 @@ func TestKiroListAvailableModelsPaginatesAndUsesProfileArn(t *testing.T) {
 	require.Equal(t, "application/json", requests[0].Header.Get("Accept"))
 	require.Empty(t, requests[0].Header.Get("X-Amz-Target"))
 	require.Equal(t, "page-2", requests[1].URL.Query().Get("nextToken"))
-	require.Equal(t, []string{"claude-opus-5-5", "claude-opus-5-5-thinking", "gpt-5.6-sol"}, kiroSyncPublicModelNames(ids))
-	_, metadata := kiroPublicCatalog(ids)
+	names, metadata := kiroPublicCatalog(ids)
+	require.Equal(t, []string{"claude-opus-5-5", "claude-opus-5-5-thinking", "gpt-5.6-sol"}, names)
 	require.Equal(t, "claude-opus-5.5", metadata["claude-opus-5-5"].ID)
 	require.Equal(t, "claude-opus-5.5", metadata["claude-opus-5-5-thinking"].ID)
 	require.Equal(t, "gpt-5.6-sol", metadata["gpt-5.6-sol"].ID)
@@ -88,9 +89,9 @@ func TestKiroListAvailableModelsRetriesForbiddenRegion(t *testing.T) {
 		}, nil
 	}
 
-	ids, err := kiroListAvailableModelIDsWithDo(context.Background(), account, "token", do)
+	listed, err := kiroListAvailableModelsWithDo(context.Background(), account, "token", do)
 	require.NoError(t, err)
-	require.Equal(t, []string{"claude-sonnet-5"}, ids)
+	require.Equal(t, []string{"claude-sonnet-5"}, listedKiroModelIDs(listed))
 	require.Equal(t, []string{"q.us-east-1.amazonaws.com", "q.eu-central-1.amazonaws.com"}, hosts)
 }
 
@@ -121,9 +122,9 @@ func TestKiroListAvailableModelsRetriesForbiddenRegionFromEU(t *testing.T) {
 		}, nil
 	}
 
-	ids, err := kiroListAvailableModelIDsWithDo(context.Background(), account, "token", do)
+	listed, err := kiroListAvailableModelsWithDo(context.Background(), account, "token", do)
 	require.NoError(t, err)
-	require.Equal(t, []string{"claude-sonnet-4.6"}, ids)
+	require.Equal(t, []string{"claude-sonnet-4.6"}, listedKiroModelIDs(listed))
 	require.Equal(t, []string{"q.eu-central-1.amazonaws.com", "q.us-east-1.amazonaws.com"}, hosts)
 }
 
@@ -143,7 +144,7 @@ func TestKiroListAvailableModelsOAuthUsesPinnedUsageHeaders(t *testing.T) {
 		}
 	}
 
-	_, err := kiroListAvailableModelIDsWithDo(context.Background(), oauth, "token", do(&oauthReq))
+	_, err := kiroListAvailableModelsWithDo(context.Background(), oauth, "token", do(&oauthReq))
 	require.NoError(t, err)
 	require.Contains(t, oauthReq.Header.Get("User-Agent"), "api/codewhispererstreaming#1.0.34")
 	require.Contains(t, oauthReq.Header.Get("User-Agent"), "aws-sdk-js/1.0.34")
@@ -154,7 +155,7 @@ func TestKiroListAvailableModelsOAuthUsesPinnedUsageHeaders(t *testing.T) {
 	require.NotContains(t, oauthUA, "os/darwin")
 	require.True(t, strings.Contains(oauthUA, "os/macos") || strings.Contains(oauthUA, "os/win32"))
 
-	_, err = kiroListAvailableModelIDsWithDo(context.Background(), apiKey, "ksk_test", do(&apiKeyReq))
+	_, err = kiroListAvailableModelsWithDo(context.Background(), apiKey, "ksk_test", do(&apiKeyReq))
 	require.NoError(t, err)
 	require.Empty(t, apiKeyReq.Header.Get("x-amzn-kiro-agent-mode"))
 	require.Equal(t, "attempt=1; max=3", apiKeyReq.Header.Get("Amz-Sdk-Request"))
@@ -179,10 +180,12 @@ func TestKiroListAvailableModelsAPIKeyOmitsProfileArn(t *testing.T) {
 		}, nil
 	}
 
-	ids, err := kiroListAvailableModelIDsWithDo(context.Background(), account, "ksk_test", do)
+	listed, err := kiroListAvailableModelsWithDo(context.Background(), account, "ksk_test", do)
 	require.NoError(t, err)
+	ids := listedKiroModelIDs(listed)
 	require.Equal(t, []string{"claude-opus-5"}, ids)
-	require.Equal(t, []string{"claude-opus-5", "claude-opus-5-thinking"}, kiroSyncPublicModelNames(ids))
+	names, _ := kiroPublicCatalog(ids)
+	require.Equal(t, []string{"claude-opus-5", "claude-opus-5-thinking"}, names)
 }
 
 func TestKiroListAvailableModelsParsesTokenLimits(t *testing.T) {
@@ -278,10 +281,35 @@ func TestKiroListAvailableModelsStopsAfterTenPages(t *testing.T) {
 		}, nil
 	}
 
-	ids, err := kiroListAvailableModelIDsWithDo(context.Background(), account, "token", do)
+	listed, err := kiroListAvailableModelsWithDo(context.Background(), account, "token", do)
 	require.NoError(t, err)
 	require.Equal(t, kiroListModelsMaxPages, calls)
-	require.Equal(t, []string{"claude-opus-5"}, ids)
+	require.Equal(t, []string{"claude-opus-5"}, listedKiroModelIDs(listed))
+}
+
+func TestBuildKiroListModelsRequestRejectsUntrustedRegion(t *testing.T) {
+	account := &Account{Platform: PlatformKiro, Type: AccountTypeOAuth}
+	_, err := buildKiroListModelsRequest(context.Background(), account, "token", "us-east-1.amazonaws.com/evil", "")
+	require.Error(t, err)
+	_, err = buildKiroListModelsRequest(context.Background(), account, "token", "user@us-east-1", "")
+	require.Error(t, err)
+
+	req, err := buildKiroListModelsRequest(context.Background(), account, "token", "US-EAST-1", "")
+	require.NoError(t, err)
+	require.Equal(t, "https", req.URL.Scheme)
+	require.True(t, strings.EqualFold(req.URL.Hostname(), "q.us-east-1.amazonaws.com"))
+	require.Equal(t, "/ListAvailableModels", req.URL.Path)
+	require.Nil(t, req.URL.User)
+}
+
+func listedKiroModelIDs(models []kiroListedModel) []string {
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		if id := strings.TrimSpace(model.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func TestBuildKiroRelayModelsRequestUsesBaseURL(t *testing.T) {

@@ -240,15 +240,13 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			if tooLong, ok := respondKiroAnthropicPromptTooLong(c, account, webSearchErr); ok {
 				return nil, tooLong
 			}
-			if err := s.finishKiroWebSearchLoopError(ctx, c, account, mappedModel, body, webSearchErr); err != nil {
-				return nil, err
-			}
+			return nil, s.finishKiroWebSearchLoopError(ctx, c, account, mappedModel, body, webSearchErr)
 		}
 	}
 	if s.kiroMixedToolWebSearchEnabled(ctx, parsed.Group) && hasMixedKiroWebSearchTools(body) {
 		webSearchResult, webSearchErr := s.executeKiroMixedToolWebSearch(ctx, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header)
-		switch {
-		case webSearchErr == nil:
+		switch webSearchErr {
+		case nil:
 			if webSearchResult == nil {
 				return nil, fmt.Errorf("kiro mixed web search returned an empty result")
 			}
@@ -271,9 +269,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			if tooLong, ok := respondKiroAnthropicPromptTooLong(c, account, webSearchErr); ok {
 				return nil, tooLong
 			}
-			if err := s.finishKiroWebSearchLoopError(ctx, c, account, mappedModel, body, webSearchErr); err != nil {
-				return nil, err
-			}
+			return nil, s.finishKiroWebSearchLoopError(ctx, c, account, mappedModel, body, webSearchErr)
 		}
 	}
 
@@ -1041,7 +1037,7 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 			estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), requestBody),
 			kiroStoredMaxInputTokens(account, mappedModel, gjson.GetBytes(requestBody, "model").String()),
 		)
-		respondKiroAnthropicPromptTooLong(c, account, tooLong)
+		_, _ = respondKiroAnthropicPromptTooLong(c, account, tooLong)
 		return tooLong
 	}
 	if classification.Category == kiroErrorMonthlyRequest {

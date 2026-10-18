@@ -431,10 +431,10 @@ func codexMetricAttributeSignature(attributes map[string]string) string {
 	sort.Strings(keys)
 	var builder strings.Builder
 	for _, key := range keys {
-		builder.WriteString(key)
-		builder.WriteByte('=')
-		builder.WriteString(attributes[key])
-		builder.WriteByte('\x1f')
+		_, _ = builder.WriteString(key)
+		_ = builder.WriteByte('=')
+		_, _ = builder.WriteString(attributes[key])
+		_ = builder.WriteByte('\x1f')
 	}
 	return builder.String()
 }
@@ -543,7 +543,11 @@ func codexStartupMetricValue(profile codexTelemetryProfile, descriptor codexMetr
 	if descriptor.name == "codex.turn.unified_exec.running_processes" || descriptor.name == "codex.turn.tool.call" {
 		return 0
 	}
-	if descriptor.name == "codex.windows_mxc.available" && !strings.EqualFold(codexRuntime(profile)["runtime_os"].(string), "windows") {
+	runtimeOS, ok := codexRuntime(profile)["runtime_os"].(string)
+	if !ok {
+		panic("codex runtime_os is not a string")
+	}
+	if descriptor.name == "codex.windows_mxc.available" && !strings.EqualFold(runtimeOS, "windows") {
 		return 0
 	}
 	if descriptor.kind == "sum" {

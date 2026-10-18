@@ -350,14 +350,6 @@ func filterSSEChunkDrop(chunk []byte, drop map[int]struct{}, indexOffset int) ([
 	return []byte(builder.String()), true
 }
 
-func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool {
-	drop := map[int]struct{}{}
-	if webSearchToolUseIndex >= 0 {
-		drop[webSearchToolUseIndex] = struct{}{}
-	}
-	return shouldSuppressEventPayloadSet(payload, drop)
-}
-
 func shouldSuppressEventPayloadSet(payload string, drop map[int]struct{}) bool {
 	if payload == "" {
 		return false

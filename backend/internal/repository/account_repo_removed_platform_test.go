@@ -29,7 +29,9 @@ func TestKnownPlatformPredicateExcludesRemovedPlatform(t *testing.T) {
 	require.Contains(t, query, `"platform" IN`)
 	bound := make([]string, 0, len(args))
 	for _, arg := range args {
-		bound = append(bound, arg.(string))
+		text, ok := arg.(string)
+		require.True(t, ok)
+		bound = append(bound, text)
 	}
 	require.ElementsMatch(t, domain.ConcretePlatformIDs(), bound)
 	require.NotContains(t, bound, removedPlatform)

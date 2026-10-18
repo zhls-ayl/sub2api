@@ -621,9 +621,10 @@ func (b *codexTelemetryBody) flushJSON() {
 	}
 	if json.Valid(b.pending) {
 		status := gjson.GetBytes(b.pending, "status").String()
-		if status == "completed" {
+		switch status {
+		case "completed":
 			b.attempt.finish("completed", b.pending)
-		} else if status == "failed" {
+		case "failed":
 			b.attempt.finish("failed", b.pending)
 		}
 	}

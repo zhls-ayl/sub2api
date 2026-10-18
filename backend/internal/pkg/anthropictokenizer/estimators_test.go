@@ -55,14 +55,14 @@ func TestCountTokensWeighted(t *testing.T) {
 		{"two ascii words", "hello world", 4},
 		{"cjk sentence", "你好世界", 6},
 		// 分档边界：tier 阈值作用于基础 token（units/4）。
-		{"tier boundary just below 100", strings.Repeat("a", 399), 149}, // 99.75*1.5
-		{"tier boundary at 100", strings.Repeat("a", 400), 130},        // 100*1.3
-		{"tier boundary just below 200", strings.Repeat("a", 796), 258}, // 199*1.3
-		{"tier boundary at 200", strings.Repeat("a", 800), 250},         // 200*1.25
+		{"tier boundary just below 100", strings.Repeat("a", 399), 149},  // 99.75*1.5
+		{"tier boundary at 100", strings.Repeat("a", 400), 130},          // 100*1.3
+		{"tier boundary just below 200", strings.Repeat("a", 796), 258},  // 199*1.3
+		{"tier boundary at 200", strings.Repeat("a", 800), 250},          // 200*1.25
 		{"tier boundary just below 300", strings.Repeat("a", 1196), 373}, // 299 落在 [200,300) 档 ×1.25
-		{"tier boundary at 300", strings.Repeat("a", 1200), 360},        // 300*1.2
+		{"tier boundary at 300", strings.Repeat("a", 1200), 360},         // 300*1.2
 		{"tier boundary just below 800", strings.Repeat("a", 3196), 958}, // 799*1.2
-		{"tier boundary at 800", strings.Repeat("a", 3200), 800},        // 800*1.0
+		{"tier boundary at 800", strings.Repeat("a", 3200), 800},         // 800*1.0
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

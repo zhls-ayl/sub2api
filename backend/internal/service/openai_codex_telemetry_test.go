@@ -117,7 +117,11 @@ func TestCodexTelemetryEventContract(t *testing.T) {
 	if mainTurn["initialization_mode"] != "new" || mainTurn["steer_count"] != 0 || mainTurn["total_tokens"] != int64(20) {
 		t.Fatalf("main turn params = %#v", mainTurn)
 	}
-	if accepted["repo_hash"] != nil || len(accepted["line_fingerprints"].([]any)) != 0 {
+	fingerprints, ok := accepted["line_fingerprints"].([]any)
+	if !ok {
+		t.Fatalf("line_fingerprints type = %T", accepted["line_fingerprints"])
+	}
+	if accepted["repo_hash"] != nil || len(fingerprints) != 0 {
 		t.Fatalf("accepted fingerprint params = %#v", accepted)
 	}
 }
@@ -158,14 +162,34 @@ func TestCodexTelemetryMetricsContract(t *testing.T) {
 	if err := json.Unmarshal(buildCodexMetricsPayload(testCodexTelemetryProfile(), time.Now(), points), &payload); err != nil {
 		t.Fatalf("decode OTLP payload: %v", err)
 	}
-	resourceMetrics := payload["resourceMetrics"].([]any)
-	scopeMetrics := resourceMetrics[0].(map[string]any)["scopeMetrics"].([]any)
-	metrics := scopeMetrics[0].(map[string]any)["metrics"].([]any)
+	resourceMetrics, ok := payload["resourceMetrics"].([]any)
+	if !ok || len(resourceMetrics) == 0 {
+		t.Fatalf("resourceMetrics = %#v", payload["resourceMetrics"])
+	}
+	resourceMetric, ok := resourceMetrics[0].(map[string]any)
+	if !ok {
+		t.Fatalf("resourceMetric type = %T", resourceMetrics[0])
+	}
+	scopeMetrics, ok := resourceMetric["scopeMetrics"].([]any)
+	if !ok || len(scopeMetrics) == 0 {
+		t.Fatalf("scopeMetrics = %#v", resourceMetric["scopeMetrics"])
+	}
+	scopeMetric, ok := scopeMetrics[0].(map[string]any)
+	if !ok {
+		t.Fatalf("scopeMetric type = %T", scopeMetrics[0])
+	}
+	metrics, ok := scopeMetric["metrics"].([]any)
+	if !ok {
+		t.Fatalf("metrics type = %T", scopeMetric["metrics"])
+	}
 	if len(metrics) != 66 {
 		t.Fatalf("OTLP metric count = %d, want 66", len(metrics))
 	}
 	for _, raw := range metrics {
-		metric := raw.(map[string]any)
+		metric, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("metric type = %T", raw)
+		}
 		for _, kind := range []string{"sum", "histogram"} {
 			if aggregation, ok := metric[kind].(map[string]any); ok && aggregation["aggregationTemporality"] != float64(1) {
 				t.Fatalf("metric %q is not delta temporality", metric["name"])
@@ -175,16 +199,32 @@ func TestCodexTelemetryMetricsContract(t *testing.T) {
 		if !ok {
 			continue
 		}
-		dataPoint := histogram["dataPoints"].([]any)[0].(map[string]any)
-		buckets := dataPoint["bucketCounts"].([]any)
+		dataPoints, ok := histogram["dataPoints"].([]any)
+		if !ok || len(dataPoints) == 0 {
+			t.Fatalf("metric %q dataPoints = %#v", metric["name"], histogram["dataPoints"])
+		}
+		dataPoint, ok := dataPoints[0].(map[string]any)
+		if !ok {
+			t.Fatalf("metric %q dataPoint type = %T", metric["name"], dataPoints[0])
+		}
+		buckets, ok := dataPoint["bucketCounts"].([]any)
+		if !ok {
+			t.Fatalf("metric %q bucketCounts type = %T", metric["name"], dataPoint["bucketCounts"])
+		}
 		var bucketTotal float64
 		for _, bucket := range buckets {
-			bucketTotal += bucket.(float64)
+			count, ok := bucket.(float64)
+			if !ok {
+				t.Fatalf("metric %q bucket type = %T", metric["name"], bucket)
+			}
+			bucketTotal += count
 		}
-		if bucketTotal != dataPoint["count"].(float64) {
+		pointCount, ok := dataPoint["count"].(float64)
+		if !ok || bucketTotal != pointCount {
 			t.Fatalf("metric %q bucket total %v != count %v", metric["name"], bucketTotal, dataPoint["count"])
 		}
-		if len(dataPoint["explicitBounds"].([]any)) != len(buckets)-1 {
+		bounds, ok := dataPoint["explicitBounds"].([]any)
+		if !ok || len(bounds) != len(buckets)-1 {
 			t.Fatalf("metric %q bounds/buckets mismatch", metric["name"])
 		}
 	}

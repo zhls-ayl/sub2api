@@ -440,7 +440,6 @@ func buildUsageCleanupWhere(filters service.UsageCleanupFilters) (string, []any)
 	if filters.BillingType != nil {
 		conditions = append(conditions, fmt.Sprintf("billing_type = $%d", idx))
 		args = append(args, *filters.BillingType)
-		idx++
 	}
 	conditions, args = appendNativeCompactionV2WhereCondition(conditions, args, filters.NativeCompactionV2, "")
 	conditions, args = appendUsageLogBillingModeWhereCondition(conditions, args, filters.BillingMode)

@@ -40,7 +40,7 @@ func sendCodexTelemetryJob(job codexTelemetryJob) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return &codexTelemetryHTTPError{status: resp.StatusCode}
