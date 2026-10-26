@@ -466,6 +466,11 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 				return nil, err
 			}
 		}
+		if isFishTokenAccount(account) {
+			if err := ValidateFishMaxQualityFromExtra(account.Extra); err != nil {
+				return nil, err
+			}
+		}
 		NormalizeFixedQuotaWindows(account.Extra)
 	}
 	if input.ExpiresAt != nil && *input.ExpiresAt > 0 {
@@ -549,6 +554,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if err := validateBPSOAuthCredentials(account.Platform, account.Type, account.Credentials); err != nil {
+		return nil, err
+	}
 	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
 		return nil, err
 	}
@@ -618,6 +626,24 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 		if err := ValidateUpstreamRequestIDHeaderExtra(normalizedExtra); err != nil {
+			return nil, err
+		}
+	}
+	{
+		// Validate against the type and credentials this update will store, so
+		// a re-authorization that switches the OAuth client is judged correctly.
+		if err := validateBPSOAuthTypeChange(account.Type, input.Type); err != nil {
+			return nil, err
+		}
+		effectiveType := account.Type
+		if input.Type != "" {
+			effectiveType = input.Type
+		}
+		effectiveCredentials := account.Credentials
+		if len(input.Credentials) > 0 {
+			effectiveCredentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
+		}
+		if err := validateBPSOAuthCredentials(account.Platform, effectiveType, effectiveCredentials); err != nil {
 			return nil, err
 		}
 	}
@@ -754,6 +780,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				return nil, err
 			}
 			if err := ValidateLeonardoImageLimitsFromExtra(account.Extra); err != nil {
+				return nil, err
+			}
+		}
+		if isFishTokenAccount(account) {
+			if err := ValidateFishMaxQualityFromExtra(account.Extra); err != nil {
 				return nil, err
 			}
 		}

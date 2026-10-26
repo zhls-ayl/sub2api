@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AccountTestModal from '../AccountTestModal.vue'
+import { OPENAI_EXCEL_OAUTH_CLIENT_ID } from '@/composables/useOpenAIOAuth'
 
 const { getAvailableModels, copyToClipboard } = vi.hoisted(() => ({
   getAvailableModels: vi.fn(),
@@ -220,6 +221,50 @@ describe('AccountTestModal', () => {
       mode: 'compact'
     })
   })
+
+  it('BPS 测试失败时展示上游状态码、错误码与消息', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-5.6-sol', display_name: 'GPT-5.6 Sol' }])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"test_start","model":"gpt-5.6-sol"}\n',
+        'data: {"type":"upstream_response","upstream_status":401,"upstream_model":"gpt-5.6-sol","request_id":"req_bps_401","upstream_error_code":"token_invalidated","upstream_error_message":"Bearer [redacted] was rejected"}\n',
+        'data: {"type":"error","error":"excel BPS: basispoints_upstream_error (HTTP 401)"}\n'
+      ])
+    ) as any
+
+    const wrapper = mountModal({
+      id: 44,
+      name: 'Excel BPS',
+      platform: 'openai',
+      type: 'bps-oauth',
+      status: 'active',
+      credentials: { client_id: OPENAI_EXCEL_OAUTH_CLIENT_ID }
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    ;(wrapper.vm as any).selectedModelId = 'gpt-5.6-sol'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    const evidence = wrapper.get('[data-testid="upstream-evidence"]').text()
+    expect(evidence).toContain('401')
+    expect(evidence).toContain('req_bps_401')
+    expect(evidence).toContain('token_invalidated')
+    expect(evidence).toContain('Bearer [redacted] was rejected')
+  })
+
+  it('只有 BPS OAuth 账号提供 BPS 工具测试，且不提供 compact 测试', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-5.4', display_name: 'GPT-5.4' }])
+    const modeValues = async (type: string) => {
+      const wrapper = mountModal({ id: 43, name: 'OpenAI account', platform: 'openai', type, status: 'active' })
+      await wrapper.setProps({ show: true })
+      await flushPromises()
+      return ((wrapper.vm as any).openAITestModeOptions as Array<{ value: string }>).map((option) => option.value)
+    }
+
+    expect(await modeValues('bps-oauth')).toEqual(['default', 'bps_tools'])
+    expect(await modeValues('oauth')).toEqual(['default', 'compact'])
+  })
 })
 
 describe('AccountTestModal Leonardo', () => {
@@ -287,5 +332,82 @@ describe('AccountTestModal Leonardo', () => {
     const [, request] = (global.fetch as any).mock.calls[0]
     expect(JSON.parse(request.body)).toEqual({ model_id: 'gpt-image-2', prompt: 'a red fox' })
     expect(wrapper.find('img[alt="test-image-1"]').attributes('src')).toBe('data:image/jpeg;base64,QUJD')
+  })
+})
+
+describe('AccountTestModal Fish', () => {
+  beforeEach(() => {
+    getAvailableModels.mockReset().mockResolvedValue([{ id: 'gpt-image-2', display_name: 'GPT Image 2' }])
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: {
+        getItem: vi.fn((key: string) => (key === 'auth_token' ? 'test-token' : null)),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+        clear: vi.fn()
+      },
+      configurable: true
+    })
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"test_start","model":"gpt-image-2"}\n',
+        'data: {"type":"test_complete","success":true}\n'
+      ])
+    ) as any
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('中转号按所选模型出图并携带提示词', async () => {
+    const wrapper = mountModal({
+      id: 61,
+      name: 'Fish relay',
+      platform: 'fish',
+      type: 'apikey',
+      status: 'active',
+      credentials: { base_url: 'https://relay.example.com', api_key: 'sk-relay' }
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const promptInput = wrapper.find('textarea.textarea-stub')
+    expect(promptInput.exists()).toBe(true)
+    await promptInput.setValue('a red fox')
+
+    const startButton = wrapper.findAll('button').find((button) => button.text().includes('admin.accounts.startTest'))
+    await startButton!.trigger('click')
+    await flushPromises()
+
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toEqual({ model_id: 'gpt-image-2', prompt: 'a red fox' })
+  })
+
+  it('token 号按图像模型测试并填入默认提示词', async () => {
+    const wrapper = mountModal({
+      id: 62,
+      name: 'Fish token',
+      platform: 'fish',
+      type: 'apikey',
+      status: 'active',
+      credentials: { token: 'tok' }
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const promptInput = wrapper.find('textarea.textarea-stub')
+    expect(promptInput.exists()).toBe(true)
+    expect((promptInput.element as HTMLTextAreaElement).value).toBe(
+      'Generate a cute orange cat astronaut sticker on a clean pastel background.'
+    )
+    const startButton = wrapper.findAll('button').find((button) => button.text().includes('admin.accounts.startTest'))
+    await startButton!.trigger('click')
+    await flushPromises()
+
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toEqual({
+      model_id: 'gpt-image-2',
+      prompt: 'Generate a cute orange cat astronaut sticker on a clean pastel background.'
+    })
   })
 })

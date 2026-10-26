@@ -1,4 +1,5 @@
 import { getProviderProfile } from '@/constants/platformCatalog'
+import { DEFAULT_EXCEL_BPS_MODELS } from '@/constants/account'
 
 // =====================
 // 模型列表（硬编码，与 new-api 一致）
@@ -138,6 +139,19 @@ const leonardoModels = [
   'gpt-image-2',
   'gpt-image-2.5-flare',
   'gpt-image-2.5-sunburst',
+]
+
+// Fish Audio 对外模型。与其他平台的目录分开维护。
+const fishModels = [
+  'gpt-image-2',
+  'gpt-image-2.5-flare',
+  'gpt-image-2.5-sunburst',
+]
+
+const fishPresetMappings = [
+  { label: 'GPT Image 2', from: 'gpt-image-2', to: 'gpt-image-2', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'GPT Image 2.5 Flare', from: 'gpt-image-2.5-flare', to: 'gpt-image-2.5-flare', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: 'GPT Image 2.5 Sunburst', from: 'gpt-image-2.5-sunburst', to: 'gpt-image-2.5-sunburst', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
 ]
 
 // Leonardo 预设映射：恒等（Cookie 号出图时后端再换成上游 slug，如 openai/gpt-image-2.5-flare）。
@@ -596,6 +610,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'antigravity': return antigravityModels
     case 'kiro': return kiroModels
     case 'leonardo': return leonardoModels
+    case 'fish': return fishModels
     case 'zhipu': return zhipuModels
     case 'qwen': return qwenModels
     case 'deepseek': return deepseekModels
@@ -641,8 +656,21 @@ export function getPresetMappingsByPlatform(platform: string) {
   if (platform === 'antigravity') return antigravityPresetMappings
   if (platform === 'kiro') return kiroPresetMappings
   if (platform === 'leonardo') return leonardoPresetMappings
+  if (platform === 'fish') return fishPresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings
   return anthropicPresetMappings
+}
+
+// BPS OAuth 账号只服务 BPS 模型：快速添加只给默认 BPS 模型（from = to），颜色沿用 OpenAI 预设。
+export function getBPSPresetMappings() {
+  return DEFAULT_EXCEL_BPS_MODELS.map(model =>
+    openaiPresetMappings.find(preset => preset.from === model && preset.to === model) ?? {
+      label: model,
+      from: model,
+      to: model,
+      color: 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-300'
+    }
+  )
 }
 
 // =====================

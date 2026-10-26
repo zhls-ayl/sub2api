@@ -20,4 +20,16 @@ describe('PlatformIcon', () => {
     expect(wrapper.html()).toContain('M398.554 818.914')
     expect(wrapper.html()).not.toContain('m3.127 10.604')
   })
+
+  it('Fish Audio 使用波形图标，不走通用地球兜底', () => {
+    const wrapper = mount(PlatformIcon, {
+      props: {
+        platform: 'fish'
+      }
+    })
+
+    expect(getSvgViewBox(wrapper)).toBe('0 0 512 512')
+    expect(wrapper.findAll('rect').length).toBeGreaterThan(10)
+    expect(wrapper.html()).not.toContain('M12 2C6.48 2')
+  })
 })

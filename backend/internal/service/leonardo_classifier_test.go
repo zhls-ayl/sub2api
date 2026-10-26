@@ -192,7 +192,7 @@ func TestLeonardoCookieSanitizePolicy(t *testing.T) {
 
 func TestLeonardoDefaultModelsListCandidates(t *testing.T) {
 	require.Equal(t, LeonardoModelIDs(), defaultModelsListCandidateIDs(PlatformLeonardo))
-	require.True(t, defaultAllowImageGenerationForPlatform(PlatformLeonardo))
+	require.True(t, DefaultAllowImageGenerationForPlatform(PlatformLeonardo))
 }
 
 func TestLeonardoCredentialFieldsSubset(t *testing.T) {

@@ -63,7 +63,7 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 	if apiKey.Group != nil {
 		platform = apiKey.Group.Platform
 	}
-	if platform != service.PlatformOpenAI && platform != service.PlatformGrok && platform != service.PlatformLeonardo {
+	if platform != service.PlatformOpenAI && platform != service.PlatformGrok && platform != service.PlatformLeonardo && platform != service.PlatformFish {
 		imageTaskJSONError(c, http.StatusNotFound, "not_found_error", "Images API is not supported for this platform")
 		return
 	}
@@ -223,6 +223,12 @@ func (h *AsyncImageHandler) executeWithGateway(platform string, c *gin.Context) 
 			return
 		}
 		h.gateway.LeonardoImages(c)
+	case service.PlatformFish:
+		if h.gateway == nil {
+			imageTaskJSONError(c, http.StatusServiceUnavailable, "api_error", "image gateway is unavailable")
+			return
+		}
+		h.gateway.FishImages(c)
 	default:
 		h.openAI.Images(c)
 	}

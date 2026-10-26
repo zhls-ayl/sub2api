@@ -228,6 +228,8 @@ type SystemSettings struct {
 	ClaudeCodeClientVersion          string                                    `json:"claude_code_client_version"`
 	ClaudeCodeClientVersionSynced    string                                    `json:"claude_code_client_version_synced"`
 	ClaudeCodeVersionAutoSyncEnabled bool                                      `json:"claude_code_version_auto_sync_enabled"`
+	FishImageMaxCropPixels           int                                       `json:"fish_image_max_crop_pixels"`
+	FishImageMaxUpscaleFactor        float64                                   `json:"fish_image_max_upscale_factor"`
 
 	// codex_cli_only 加固
 	MinCodexVersion                      string `json:"min_codex_version"`

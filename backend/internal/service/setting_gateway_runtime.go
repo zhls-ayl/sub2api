@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -76,6 +77,82 @@ const gatewayForwardingCacheTTL = 60 * time.Second
 const gatewayForwardingErrorTTL = 5 * time.Second
 const gatewayForwardingDBTimeout = 5 * time.Second
 
+// cachedFishImageFitLimits 缓存 fish 原生号动态尺寸规划阈值（进程内缓存，60s TTL）
+type cachedFishImageFitLimits struct {
+	limits    domain.FishFitLimits
+	expiresAt int64 // unix nano
+}
+
+var fishImageFitLimitsCache atomic.Value // *cachedFishImageFitLimits
+var fishImageFitLimitsSF singleflight.Group
+
+const fishImageFitLimitsCacheTTL = 60 * time.Second
+const fishImageFitLimitsErrorTTL = 5 * time.Second
+const fishImageFitLimitsDBTimeout = 5 * time.Second
+
+// parseFishImageFitLimitsValues 从持久化 settings map 解析 fish 动态尺寸
+// 阈值：缺失/非法回退默认（裁 4px / 放大 2.0），再经 Normalized 钳制。
+// parseSettings 与运行时缓存共用，保证两条读取路径口径一致。
+func parseFishImageFitLimitsValues(values map[string]string) domain.FishFitLimits {
+	limits := domain.DefaultFishFitLimits()
+	if raw, ok := values[SettingKeyFishImageMaxCropPixels]; ok && strings.TrimSpace(raw) != "" {
+		if v, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && v >= 0 {
+			limits.MaxCropPixels = v
+		}
+	}
+	if raw, ok := values[SettingKeyFishImageMaxUpscaleFactor]; ok && strings.TrimSpace(raw) != "" {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil && v > 0 {
+			limits.MaxUpscaleFactor = v
+		}
+	}
+	return limits.Normalized()
+}
+
+func (s *SettingService) getFishImageFitLimitsCached(ctx context.Context) domain.FishFitLimits {
+	defaults := domain.DefaultFishFitLimits()
+	if cached, ok := fishImageFitLimitsCache.Load().(*cachedFishImageFitLimits); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.limits
+		}
+	}
+	val, _, _ := fishImageFitLimitsSF.Do("fish_image_fit_limits", func() (any, error) {
+		if cached, ok := fishImageFitLimitsCache.Load().(*cachedFishImageFitLimits); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt {
+				return cached.limits, nil
+			}
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fishImageFitLimitsDBTimeout)
+		defer cancel()
+		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+			SettingKeyFishImageMaxCropPixels,
+			SettingKeyFishImageMaxUpscaleFactor,
+		})
+		if err != nil {
+			slog.Warn("failed to get fish image fit limits", "error", err)
+			fishImageFitLimitsCache.Store(&cachedFishImageFitLimits{
+				limits:    defaults,
+				expiresAt: time.Now().Add(fishImageFitLimitsErrorTTL).UnixNano(),
+			})
+			return defaults, nil
+		}
+		limits := parseFishImageFitLimitsValues(values)
+		fishImageFitLimitsCache.Store(&cachedFishImageFitLimits{
+			limits:    limits,
+			expiresAt: time.Now().Add(fishImageFitLimitsCacheTTL).UnixNano(),
+		})
+		return limits, nil
+	})
+	if limits, ok := val.(domain.FishFitLimits); ok {
+		return limits
+	}
+	return defaults
+}
+
+// GetFishImageFitLimits 返回 fish 原生号动态尺寸规划阈值（缺省裁 4px / 放大 2 倍）。
+func (s *SettingService) GetFishImageFitLimits(ctx context.Context) domain.FishFitLimits {
+	return s.getFishImageFitLimitsCached(ctx)
+}
+
 // cachedAccountSchedulingThresholds 缓存平台自动停调阈值（进程内缓存，60s TTL）
 type cachedAccountSchedulingThresholds struct {
 	thresholds map[string]int
@@ -100,7 +177,7 @@ const antigravityUserAgentVersionErrorTTL = 5 * time.Second
 const antigravityUserAgentVersionDBTimeout = 5 * time.Second
 
 // DefaultOpenAICodexUserAgent 是 OpenAI Codex 默认 User-Agent，用于规避浏览器 UA 的质询。
-// 默认采用 codex-tui 身份，版本段随 codexCLIVersion 一起更新。
+// 默认采用 codex_cli_rs 身份，避免历史 codex-tui 出口触发 sub2api 的身份风控指纹。
 const DefaultOpenAICodexUserAgent = codexCLIUserAgent
 
 // cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
@@ -654,7 +731,7 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 
 // GetOpenAICodexClientVersion 返回出站声明的 Codex 客户端版本号。
 // 优先级：管理员在面板覆写的版本 → 自动同步到的官方最新稳定版 → 内置常量。
-// 上游在容量紧张时按客户端身份分优先级降载，陈旧版本会被优先丢弃，故该值需保持跟随官方发布；
+// 上游会按客户端身份进行风控分层，陈旧版本可能被优先丢弃，故该值需保持跟随官方发布；
 // 自动同步让运维不必为了跟版本而发新版本。
 func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string {
 	fallback := codexCLIVersion
@@ -815,11 +892,11 @@ func (s *SettingService) InvalidateClaudeCodeClientVersionCache() {
 }
 
 // GetOpenAICodexCanonicalUserAgent 返回出站规范 Codex User-Agent。
-// 未填面板 UA 时按当前生效的客户端版本号拼出标准 Codex TUI UA。
+// 未填面板 UA 时按当前生效的客户端版本号拼出标准 Codex CLI UA。
 //
 // 面板 UA 只贡献客户端名与 OS / 架构 / 终端指纹，版本段一律用生效版本重建：该输入框是
 // 唯一能改 UA 后缀的地方，但它填写于某个历史版本，逐字沿用会把出站身份永久钉死在陈旧
-// 版本上并绕过自动同步——而陈旧身份正是上游优先降载的那一侧。
+// 版本上并绕过自动同步——而陈旧身份正是上游风控更严格的那一侧。
 // 需要固定版本请填「Codex 客户端版本号」并关闭自动同步。
 func (s *SettingService) GetOpenAICodexCanonicalUserAgent(ctx context.Context) string {
 	if s == nil {

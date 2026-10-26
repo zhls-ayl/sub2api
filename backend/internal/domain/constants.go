@@ -41,7 +41,10 @@ const (
 	PlatformCline = "cline"
 	// PlatformLeonardo 是 Leonardo.ai 图片生成平台（OpenAI Images 兼容端点；
 	// 原生 Cookie 账号直连网页版 GraphQL 协议，另支持 OpenAI Images 形中转账号兜底）。
-	PlatformLeonardo  = "leonardo"
+	PlatformLeonardo = "leonardo"
+	// PlatformFish 是 fish.audio 图片生成平台（OpenAI Images 兼容端点；
+	// 账号为网页会话 Bearer token，直连 api.fish.audio 的 image-video 工具协议）。
+	PlatformFish      = "fish"
 	PlatformComposite = "composite"
 )
 
@@ -72,6 +75,7 @@ const (
 	AccountTypeUpstream       = "upstream"        // 上游透传类型账号（通过 Base URL + API Key 连接上游）
 	AccountTypeBedrock        = "bedrock"         // AWS Bedrock 类型账号（通过 SigV4 签名或 API Key 连接 Bedrock，由 credentials.auth_mode 区分）
 	AccountTypeServiceAccount = "service_account" // Google Service Account 类型账号（用于 Vertex AI）
+	AccountTypeBPSOAuth       = "bps-oauth"       // OpenAI Excel/BPS-only OAuth 账号（官方 Excel 客户端授权，只能走 BPS）
 )
 
 // Redeem type constants

@@ -15,6 +15,8 @@ const {
   importCodexSessionMock,
   createOpenAICodexPATMock,
   generateKiroIDCAuthUrlMock,
+  generateAuthUrlMock,
+  exchangeCodeMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -24,6 +26,8 @@ const {
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
   generateKiroIDCAuthUrlMock: vi.fn(),
+  generateAuthUrlMock: vi.fn(),
+  exchangeCodeMock: vi.fn(),
   authIsSimpleMode: { value: true },
 }))
 
@@ -52,6 +56,8 @@ vi.mock('@/api/admin', () => ({
       checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
       createOpenAICodexPAT: createOpenAICodexPATMock,
+      generateAuthUrl: generateAuthUrlMock,
+      exchangeCode: exchangeCodeMock,
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -79,6 +85,8 @@ vi.mock('vue-i18n', async () => {
 })
 
 import CreateAccountModal from '../CreateAccountModal.vue'
+import { DEFAULT_EXCEL_BPS_MODELS } from '@/constants/account'
+import { OPENAI_EXCEL_OAUTH_CLIENT_ID } from '@/composables/useOpenAIOAuth'
 
 const BaseDialogStub = defineComponent({
   name: 'BaseDialog',
@@ -90,12 +98,15 @@ const OAuthAuthorizationFlowStub = defineComponent({
   name: 'OAuthAuthorizationFlow',
   props: {
     showManualOption: Boolean,
+    showMobileRefreshTokenOption: Boolean,
     showCodexSessionImportOption: Boolean,
     showAgentIdentityOption: Boolean,
     showCodexPatOption: Boolean,
+    excelOauth: Boolean,
     initialInputMethod: String,
   },
   data: () => ({ inputMethod: 'manual' }),
+  methods: { reset() {} },
   emits: ['generate-url', 'import-codex-session', 'import-codex-pat'],
   template: `
     <div>
@@ -160,6 +171,7 @@ const ModelWhitelistSelectorStub = defineComponent({
       default: () => [],
     },
     platform: String,
+    availableModels: { type: Array, default: undefined },
     syncCredentials: Object,
   },
   emits: ['update:modelValue', 'upstream-synced'],
@@ -261,10 +273,13 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   afterEach(() => vi.useRealTimers())
 
-  it('renders all 15 platforms in one grid with Kiro and Leonardo last', () => {
+  it('renders all 16 platforms in one grid with Kiro, Leonardo and Fish last', () => {
     const wrapper = mountModal()
     const platformSelector = wrapper.get('[data-tour="account-form-platform"]')
 
+    // 手机 3 列，sm 起 4 列（16 个平台正好 4 行）。
+    expect(platformSelector.classes()).toEqual(expect.arrayContaining(['grid-cols-3', 'sm:grid-cols-4']))
+    expect(platformSelector.classes()).not.toContain('sm:grid-cols-5')
     expect(platformSelector.findAll('button').map((button) => button.text())).toEqual([
       'Anthropic',
       'OpenAI',
@@ -281,6 +296,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       'Cline',
       'Kiro',
       'Leonardo',
+      'Fish Audio',
     ])
   })
 
@@ -726,7 +742,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       .get('[data-tour="account-form-platform"]')
       .findAll('button')
       .map((button) => button.text().trim())
-    expect(labels.slice(-5)).toEqual(['OpenCode', 'Command Code', 'Cline', 'Kiro', 'Leonardo'])
+    expect(labels.slice(-6)).toEqual(['OpenCode', 'Command Code', 'Cline', 'Kiro', 'Leonardo', 'Fish Audio'])
     expect(labels.slice(5, 10)).toEqual(['TypeSafe / Jev', 'Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax'])
   })
 
@@ -991,6 +1007,145 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(payload?.upstream_billing_probe_enabled).toBe(true)
     // 创建成功后前端立即发起一次首探（与其他 apikey 平台一致）。
     expect(probeUpstreamBillingMock).toHaveBeenCalledWith(42)
+  })
+
+  it('OpenAI 的 OAuth / BPS OAuth / API Key 三个类型按钮在同一行', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+
+    const grid = wrapper.get('[data-testid="openai-account-type-grid"]')
+    expect(grid.classes()).toContain('grid-cols-3')
+    expect(grid.classes()).not.toContain('grid-cols-2')
+    const labels = grid.findAll(':scope > button').map((button) => button.find('span.block').text())
+    expect(labels).toEqual(['OAuth', 'BPS OAuth', 'API Key'])
+  })
+
+  it('BPS OAuth 只保留 Excel 可用的授权入口', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('[data-testid="openai-bps-oauth"]').trigger('click')
+    expect(wrapper.find('[data-testid="bps-oauth-models"]').exists()).toBe(false)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('BPS account')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const flow = wrapper.findComponent({ name: 'OAuthAuthorizationFlow' })
+    expect(flow.exists()).toBe(true)
+    expect((wrapper.vm as any).form.type).toBe('bps-oauth')
+    expect(flow.props('showMobileRefreshTokenOption')).toBe(false)
+    expect(flow.props('showCodexSessionImportOption')).toBe(false)
+    expect(flow.props('showAgentIdentityOption')).toBe(false)
+    expect(flow.props('showCodexPatOption')).toBe(false)
+  })
+
+  it('BPS OAuth 第二步提示 Excel 回调，返回上一步保留 BPS 类型与模型', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('[data-testid="openai-bps-oauth"]').trigger('click')
+    const models = [...(wrapper.vm as any).allowedModels]
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('BPS account')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'OAuthAuthorizationFlow' }).props('excelOauth')).toBe(true)
+
+    ;(wrapper.vm as any).goBackToBasicInfo()
+    await flushPromises()
+
+    expect((wrapper.vm as any).form.type).toBe('bps-oauth')
+    expect((wrapper.vm as any).openaiBPSOAuth).toBe(true)
+    expect((wrapper.vm as any).allowedModels).toEqual(models)
+  })
+
+  it('BPS OAuth 默认在通用模型限制里预填 BPS 模型，候选只列 BPS 模型', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    const section = () => wrapper.get('[data-testid="oauth-model-restriction-section"]')
+    // 普通 OAuth：原生目录，不限定候选
+    expect(section().getComponent(ModelWhitelistSelectorStub).props('availableModels')).toBeUndefined()
+    expect(section().getComponent(ModelWhitelistSelectorStub).props('modelValue')).toContain('gpt-image-2')
+
+    await wrapper.get('[data-testid="openai-bps-oauth"]').trigger('click')
+    await flushPromises()
+    const selector = section().getComponent(ModelWhitelistSelectorStub)
+    expect(selector.props('modelValue')).toEqual([...DEFAULT_EXCEL_BPS_MODELS])
+    expect(selector.props('availableModels')).toEqual([...DEFAULT_EXCEL_BPS_MODELS])
+
+    const mappingTab = section().findAll('button').find((button) => button.text() === 'admin.accounts.modelMapping')
+    await mappingTab!.trigger('click')
+    expect(section().findAll('[data-testid="oauth-preset-mapping"]').map((button) => button.text())).toEqual([
+      '+ GPT-6 Astra',
+      '+ GPT-5.6 Sol',
+      '+ GPT-5.6 Terra',
+    ])
+
+    // 切回普通 OAuth：恢复原生预设与白名单
+    await selectButtonByText(wrapper, 'admin.accounts.types.chatgptOauth')
+    await flushPromises()
+    expect(section().findAll('[data-testid="oauth-preset-mapping"]').map((button) => button.text())).toContain('+ GPT-4o')
+    const whitelistTab = section().findAll('button').find((button) => button.text() === 'admin.accounts.modelWhitelist')
+    await whitelistTab!.trigger('click')
+    await flushPromises()
+    expect(section().getComponent(ModelWhitelistSelectorStub).props('availableModels')).toBeUndefined()
+    expect(section().getComponent(ModelWhitelistSelectorStub).props('modelValue')).toContain('gpt-image-2')
+  })
+
+  it('BPS OAuth 建号把模型写进 model_mapping，不再写 openai_excel_bps_models', async () => {
+    generateAuthUrlMock.mockResolvedValue({
+      auth_url: 'https://auth.openai.com/oauth/authorize?client_id=excel&state=bps.test',
+      session_id: 'session-1',
+    })
+    exchangeCodeMock.mockResolvedValue({
+      access_token: 'at',
+      refresh_token: 'rt',
+      client_id: OPENAI_EXCEL_OAUTH_CLIENT_ID,
+    })
+    createAccountMock.mockResolvedValue({ id: 42 })
+
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('[data-testid="openai-bps-oauth"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('BPS account')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    await wrapper.get('[data-testid="generate-url"]').trigger('click')
+    await flushPromises()
+    expect(generateAuthUrlMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ oauth_client: 'excel' }))
+
+    await (wrapper.vm as any).handleOpenAIExchange('auth-code')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.type).toBe('bps-oauth')
+    expect(payload?.credentials?.model_mapping).toEqual({
+      'gpt-6-astra': 'gpt-6-astra',
+      'gpt-5.6-sol': 'gpt-5.6-sol',
+      'gpt-5.6-terra': 'gpt-5.6-terra',
+    })
+    expect(payload?.extra ?? {}).not.toHaveProperty('openai_excel_bps_models')
+  })
+
+  it('BPS OAuth 不受 Codex 透传开关影响，始终应用模型映射', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    ;(wrapper.vm as any).openaiPassthroughEnabled = true
+    await flushPromises()
+    expect((wrapper.vm as any).isOpenAIModelRestrictionDisabled).toBe(true)
+
+    await wrapper.get('[data-testid="openai-bps-oauth"]').trigger('click')
+    await flushPromises()
+    expect((wrapper.vm as any).isOpenAIModelRestrictionDisabled).toBe(false)
+  })
+
+  it('普通 OpenAI OAuth 仍提供 Codex 导入入口', async () => {
+    const wrapper = await openCodexImportStep()
+    const flow = wrapper.findComponent({ name: 'OAuthAuthorizationFlow' })
+    expect((wrapper.vm as any).form.type).toBe('oauth')
+    expect(flow.props('showMobileRefreshTokenOption')).toBe(true)
+    expect(flow.props('showCodexSessionImportOption')).toBe(true)
+    expect(flow.props('showAgentIdentityOption')).toBe(true)
+    expect(flow.props('showCodexPatOption')).toBe(true)
   })
 
   it('leaves Codex session import billing ownership to the backend', async () => {
@@ -1310,5 +1465,56 @@ describe('CreateAccountModal Leonardo accounts', () => {
     expect(wrapper.find('[data-testid="leonardo-credit-unit-price-usd"]').exists()).toBe(false)
     expect(payload?.extra?.leonardo_credit_unit_price_usd).toBeUndefined()
     expect(payload?.extra?.leonardo_max_short_edge).toBeUndefined()
+  })
+})
+
+describe('CreateAccountModal Fish accounts', () => {
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    createAccountMock.mockReset().mockResolvedValue({ id: 8, platform: 'fish', type: 'apikey' })
+  })
+
+  it('shows both account types on the first step and creates a relay as apikey', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="platform-tab-fish"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="fish-account-type-token"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="fish-account-type-relay"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="fish-relay-base-url"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="fish-account-type-relay"]').trigger('click')
+    expect(wrapper.find('[data-testid="fish-relay-base-url"]').exists()).toBe(true)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Fish relay')
+    await wrapper.get('[data-testid="fish-relay-base-url"]').setValue('https://relay.example.com')
+    await wrapper.get('[data-testid="fish-relay-api-key"]').setValue('sk-relay')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.platform).toBe('fish')
+    expect(payload?.type).toBe('apikey')
+    expect(payload?.credentials).toMatchObject({ base_url: 'https://relay.example.com', api_key: 'sk-relay' })
+    expect(wrapper.find('[data-testid="fish-model-restriction-section"]').exists()).toBe(true)
+  })
+
+  it('creates an oauth token account on the first step', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="platform-tab-fish"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="fish-token-input"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="fish-model-restriction-section"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('admin.accounts.oauth.authMethod')
+
+    await wrapper.get('[data-tour="account-form-name"]').setValue('Fish token')
+    await wrapper.get('[data-testid="fish-token-input"]').setValue('46471c2b-7cdc-4671-acc4-c0b2fd111817')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload?.platform).toBe('fish')
+    expect(payload?.type).toBe('apikey')
+    // 原生号 token 落在 api_key：调度快照只保留 api_key（见 044adb592）。
+    expect(payload?.credentials).toEqual({ api_key: '46471c2b-7cdc-4671-acc4-c0b2fd111817' })
+    expect(wrapper.find('[data-testid="fish-token-input"]').exists()).toBe(true)
   })
 })

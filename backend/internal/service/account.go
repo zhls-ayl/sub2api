@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"math"
 	"net/url"
@@ -85,6 +84,9 @@ type Account struct {
 	modelMappingCacheRawLen         int
 	modelMappingCacheRawSig         uint64
 	modelMappingCacheRuntimeVersion uint64
+	// modelMappingCacheShared 为 true 时缓存来自只读共享母本（见 PrepareSharedSnapshot），
+	// 指针、长度与运行时版本匹配即直接复用预解析结果，不计算签名。
+	modelMappingCacheShared bool
 
 	// header_overrides 热路径缓存（非持久化字段，同 model_mapping 缓存先例）
 	headerOverrideCache               map[string]string
@@ -215,7 +217,7 @@ func (a *Account) IsSchedulable() bool {
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
 		return false
 	}
-	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceeded() {
+	if a.SupportsAccountQuota() && a.IsQuotaExceeded() {
 		return false
 	}
 	return true
@@ -648,6 +650,9 @@ func (a *Account) GetModelMapping() map[string]string {
 		a.modelMappingCacheRawPtr == rawPtr &&
 		a.modelMappingCacheRawLen == rawLen &&
 		a.modelMappingCacheRuntimeVersion == runtimeVersion {
+		if a.modelMappingCacheShared {
+			return a.modelMappingCache
+		}
 		rawSig = modelMappingSignature(rawMapping)
 		rawSigReady = true
 		if a.modelMappingCacheRawSig == rawSig {
@@ -667,7 +672,22 @@ func (a *Account) GetModelMapping() map[string]string {
 	a.modelMappingCacheRawLen = rawLen
 	a.modelMappingCacheRawSig = rawSig
 	a.modelMappingCacheRuntimeVersion = runtimeVersion
+	a.modelMappingCacheShared = false
 	return mapping
+}
+
+// PrepareSharedSnapshot 预解析模型映射，并把账号标记为只读共享母本。
+// 母本按值复制出的副本与母本共用 Credentials 及其中 model_mapping 的同一 map：
+// 这些内层 map 在运行期不被原地修改，母本留在缓存期间持有这些 map，其地址不会被复用，
+// 因此副本在指针、长度与运行时版本都匹配时直接复用预解析结果，不计算签名；
+// 副本替换 Credentials 等导致任一项不匹配时回到普通的重建路径。
+// 只能由构造该账号的 goroutine 在其发布给其它 goroutine 之前调用，发布后母本不得再被修改。
+func (a *Account) PrepareSharedSnapshot() {
+	if a == nil {
+		return
+	}
+	a.GetModelMapping()
+	a.modelMappingCacheShared = true
 }
 
 func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]string {
@@ -732,6 +752,8 @@ func defaultModelMappingForPlatform(platform string) map[string]string {
 		return domain.DefaultKiroModelMapping
 	case domain.PlatformLeonardo:
 		return domain.DefaultLeonardoModelMapping
+	case domain.PlatformFish:
+		return domain.DefaultFishModelMapping
 	default:
 		return nil
 	}
@@ -744,28 +766,56 @@ func mapPtr(m map[string]any) uintptr {
 	return reflect.ValueOf(m).Pointer()
 }
 
+const (
+	modelMappingSignatureFNVOffset = 14695981039346656037
+	modelMappingSignatureFNVPrime  = 1099511628211
+)
+
+// modelMappingSignature 计算原始映射内容的进程内校验值，与 map 遍历顺序无关且不分配内存。
+// 每个条目把 key、分隔字节 0 与 value（string 写其字节，其它类型写标记字节 1）
+// 放进同一个 FNV-1a 哈希并经 fmix64 收尾，再对所有条目求和；
+// key 与 value 同在一个条目哈希里，交换两个 key 的 value 会改变结果。
 func modelMappingSignature(rawMapping map[string]any) uint64 {
 	if len(rawMapping) == 0 {
 		return 0
 	}
-	keys := make([]string, 0, len(rawMapping))
-	for k := range rawMapping {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	h := fnv.New64a()
-	for _, k := range keys {
-		_, _ = h.Write([]byte(k))
-		_, _ = h.Write([]byte{0})
-		if v, ok := rawMapping[k].(string); ok {
-			_, _ = h.Write([]byte(v))
+	var sum uint64
+	for k, v := range rawMapping {
+		h := uint64(modelMappingSignatureFNVOffset)
+		h = fnv1aString(h, k)
+		h = fnv1aByte(h, 0)
+		if s, ok := v.(string); ok {
+			h = fnv1aString(h, s)
 		} else {
-			_, _ = h.Write([]byte{1})
+			h = fnv1aByte(h, 1)
 		}
-		_, _ = h.Write([]byte{0xff})
+		sum += fmix64(h)
 	}
-	return h.Sum64()
+	return sum
+}
+
+func fnv1aString(h uint64, s string) uint64 {
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= modelMappingSignatureFNVPrime
+	}
+	return h
+}
+
+func fnv1aByte(h uint64, b byte) uint64 {
+	h ^= uint64(b)
+	h *= modelMappingSignatureFNVPrime
+	return h
+}
+
+// fmix64 是 MurmurHash3 的 64 位收尾函数，使条目哈希各位充分混合后再求和。
+func fmix64(h uint64) uint64 {
+	h ^= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ^= h >> 33
+	h *= 0xc4ceb9fe1a85ec53
+	h ^= h >> 33
+	return h
 }
 
 // antigravityDefaultPassthroughModels 是 Antigravity 显式 model_mapping 运行时补齐的默认透传条目：
@@ -945,6 +995,11 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 }
 
 func (a *Account) isModelMappingSupported(requestedModel string) bool {
+	// BPS-only（bps-oauth）账号没有原生 Codex 通道：不具备 BPS 资格（free / 影子）时
+	// 不服务任何模型；其余按下方 model_mapping 判定，空映射只放行默认 BPS 模型。
+	if a.IsBPSOAuth() && !a.IsExcelBPSEnabled() {
+		return false
+	}
 	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
 	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
 	// credentials 里常残留旧的非空 model_mapping，若不在此放行，透传账号会被
@@ -956,8 +1011,15 @@ func (a *Account) isModelMappingSupported(requestedModel string) bool {
 	if a.Platform == PlatformLeonardo {
 		return leonardoAccountSupportsModel(a, requestedModel)
 	}
+	// fish 同理：token 原生号与中转号都只承接 fish 公共名（gpt-image 家族）。
+	if a.Platform == PlatformFish {
+		return fishAccountSupportsModel(a, requestedModel)
+	}
 	mapping := a.GetModelMapping()
 	if len(mapping) == 0 {
+		if a.IsBPSOAuth() {
+			return isExcelBPSDefaultModel(requestedModel)
+		}
 		if a.IsOpenAIOAuth() {
 			return isOpenAIOAuthServableModel(requestedModel)
 		}
@@ -1424,9 +1486,24 @@ func (a *Account) IsBedrockAPIKey() bool {
 	return a.IsBedrock() && a.GetCredential("auth_mode") == "apikey"
 }
 
-// IsAPIKeyOrBedrock 返回账号类型是否支持配额和池模式等特性
+// IsAPIKeyOrBedrock 返回账号类型是否支持池模式等特性（账号配额判定见 SupportsAccountQuota）
 func (a *Account) IsAPIKeyOrBedrock() bool {
 	return a.Type == AccountTypeAPIKey || a.Type == AccountTypeBedrock
+}
+
+// AccountTypeSupportsQuota 返回账号类型是否支持账号配额（quota_limit 及日/周额度、quota_used 累加、超限停调度）。
+// 在 apikey/bedrock 之外额外放开 Vertex service_account；池模式等其它特性仍只看 IsAPIKeyOrBedrock。
+func AccountTypeSupportsQuota(accountType string) bool {
+	switch strings.ToLower(accountType) {
+	case AccountTypeAPIKey, AccountTypeBedrock, AccountTypeServiceAccount:
+		return true
+	}
+	return false
+}
+
+// SupportsAccountQuota 返回账号是否支持账号配额，类型集合见 AccountTypeSupportsQuota。
+func (a *Account) SupportsAccountQuota() bool {
+	return AccountTypeSupportsQuota(a.Type)
 }
 
 func (a *Account) IsOpenAI() bool {
@@ -1490,9 +1567,9 @@ func (a *Account) IsOpenAIApiKey() bool {
 // 适用 openai、国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 OpenCode Go；
 // grok 走 GetGrokBaseURL，此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
-	// Leonardo 中转号借用 OpenAI Images 转发链路做分组兜底，必须返回它自己的
-	// base_url，否则会落到 api.openai.com。
-	if isLeonardoRelayAccount(a) {
+	// Leonardo / fish 中转号借用 OpenAI Images 转发链路做分组兜底，必须返回它
+	// 自己的 base_url，否则会落到 api.openai.com。
+	if isLeonardoRelayAccount(a) || isFishRelayAccount(a) {
 		return strings.TrimRight(strings.TrimSpace(a.GetCredential("base_url")), "/")
 	}
 	if !a.IsOpenAI() && !a.IsMultiProtocolAPIKey() {
@@ -1725,7 +1802,7 @@ func (a *Account) GetOpenAIAccessToken() string {
 }
 
 func (a *Account) GetOpenAIRefreshToken() string {
-	if !a.IsOpenAIOAuth() {
+	if !a.IsOpenAIOAuthCredentialAccount() {
 		return ""
 	}
 	return a.GetCredential("refresh_token")
@@ -1836,7 +1913,7 @@ func (a *Account) GetOpenAIProtocolAPIKey() string {
 	if a == nil {
 		return ""
 	}
-	if isLeonardoRelayAccount(a) {
+	if isLeonardoRelayAccount(a) || isFishRelayAccount(a) {
 		return a.GetCredential("api_key")
 	}
 	if a.IsMultiProtocolAPIKey() {
@@ -1855,15 +1932,19 @@ func (a *Account) GetOpenAIUserAgent() string {
 	return a.GetCredential("user_agent")
 }
 
+// GetChatGPTAccountID returns the ChatGPT workspace of an OpenAI subscription
+// credential (Codex OAuth, setup token or BPS-only). It identifies the account
+// only; callers that send ChatGPT headers gate on the native protocol
+// themselves (see openai_chatgpt_headers.go).
 func (a *Account) GetChatGPTAccountID() string {
-	if !a.IsOpenAIOAuthLike() {
+	if !a.IsOpenAIOAuthLike() && !a.IsBPSOAuth() {
 		return ""
 	}
 	return a.GetCredential("chatgpt_account_id")
 }
 
 func (a *Account) IsChatGPTAccountFedRAMP() bool {
-	if !a.IsOpenAIOAuthLike() || a.Credentials == nil {
+	if (!a.IsOpenAIOAuthLike() && !a.IsBPSOAuth()) || a.Credentials == nil {
 		return false
 	}
 	v, ok := a.Credentials["chatgpt_account_is_fedramp"]
@@ -2124,7 +2205,7 @@ func (a *Account) GetOpenAIOrganizationID() string {
 }
 
 func (a *Account) GetOpenAITokenExpiresAt() *time.Time {
-	if !a.IsOpenAIOAuth() {
+	if !a.IsOpenAIOAuthCredentialAccount() {
 		return nil
 	}
 	return a.GetCredentialAsTime("expires_at")
@@ -2190,7 +2271,8 @@ func (a *Account) IsCodexTelemetryEnabled() bool {
 // 兼容字段：accounts.extra.openai_oauth_passthrough（历史 OAuth 开关）。
 // 字段缺失或类型不正确时，按 false（关闭）处理。
 func (a *Account) IsOpenAIPassthroughEnabled() bool {
-	if a == nil || !a.IsOpenAI() || a.Extra == nil {
+	// BPS 转发始终应用账号映射，透传对 bps-oauth 不生效。
+	if a == nil || !a.IsOpenAI() || a.Extra == nil || a.IsBPSOAuth() {
 		return false
 	}
 	if enabled, ok := a.Extra["openai_passthrough"].(bool); ok {
@@ -2215,7 +2297,48 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 // 优先级：
 // 1. 按账号类型读取分类型字段
 // 2. 分类型字段缺失时，回退兼容字段
+// IsExcelBPSEnabled reports whether the account routes through the Excel
+// gateway (bps.openai.com). BPS is the only channel of a BPS-only (bps-oauth)
+// account, so it is always on for eligible accounts; the account's model
+// restriction decides what it serves. Free-plan accounts are never eligible.
+func (a *Account) IsExcelBPSEnabled() bool {
+	return excelBPSRouteEligible(a)
+}
+
+const ExcelBPSIgnoreEncryptedContentKey = "openai_excel_bps_ignore_encrypted_content"
+
+// IsExcelBPSIgnoreEncryptedContentEnabled opts into replacing ciphertext that
+// BPS cannot forward, such as sub-agent messages in an old Codex conversation,
+// with an omission notice instead of rejecting the whole request.
+func (a *Account) IsExcelBPSIgnoreEncryptedContentEnabled() bool {
+	if !a.IsExcelBPSEnabled() {
+		return false
+	}
+	enabled, _ := a.Extra[ExcelBPSIgnoreEncryptedContentKey].(bool)
+	return enabled
+}
+
+// IsExcelBPSCacheCreationAsInputEnabled controls local billing and downstream usage.
+// The setting has no effect unless this account uses the Excel/BPS protocol.
+func (a *Account) IsExcelBPSCacheCreationAsInputEnabled() bool {
+	if !a.IsExcelBPSEnabled() {
+		return false
+	}
+	enabled, _ := a.Extra["openai_excel_bps_cache_creation_as_input"].(bool)
+	return enabled
+}
+
+// IsExcelBPSEnabledForModel reports whether a request for this model routes
+// through BPS. Every model of an eligible BPS-only account does; which models
+// the account accepts at all is its model restriction (IsModelSupported).
+func (a *Account) IsExcelBPSEnabledForModel(requestedModel string) bool {
+	return a.IsExcelBPSEnabled()
+}
+
 func (a *Account) IsOpenAIResponsesWebSocketV2Enabled() bool {
+	if a.IsBPSOAuth() {
+		return false
+	}
 	if a == nil || !a.IsOpenAI() || a.Extra == nil {
 		return false
 	}
