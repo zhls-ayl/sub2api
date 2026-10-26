@@ -387,6 +387,12 @@ func ProvideKiroTokenProvider(
 	return p
 }
 
+// ProvideFishImageService 构造 fish.audio 出图服务；对象存储由设置服务动态
+// 决定，与 Leonardo 出图共用同一 resolver。
+func ProvideFishImageService(settings *ImageStorageSettingService) *FishImageService {
+	return NewFishImageService(settings.Resolver())
+}
+
 // ProvideLeonardoImageService 构造 Leonardo 出图服务；对象存储由设置服务动态
 // 解析，未配置时同步返回 b64_json 即可。
 func ProvideLeonardoImageService(settings *ImageStorageSettingService) *LeonardoImageService {
@@ -945,6 +951,7 @@ var ProviderSet = wire.NewSet(
 	ProvideKiroTokenProvider,
 	ProvideLeonardoTokenProvider,
 	ProvideLeonardoImageService,
+	ProvideFishImageService,
 	ProvideKiroCooldownStore,
 	NewGeminiMessagesCompatService,
 	ProvideAntigravityTokenProvider,

@@ -115,6 +115,7 @@ const (
 	apiErrorCacheTTL        = 1 * time.Minute        // 负缓存 TTL：429 等错误缓存 1 分钟
 	antigravityErrorTTL     = 1 * time.Minute        // Antigravity 错误缓存 TTL（可恢复错误）
 	kiroUsageErrorTTL       = 1 * time.Minute        // Kiro 错误缓存 TTL（可恢复错误）
+	fishUsageErrorTTL       = 1 * time.Minute        // Fish 错误缓存 TTL（可恢复错误）
 	apiQueryMaxJitter       = 800 * time.Millisecond // 用量查询最大随机延迟
 	windowStatsCacheTTL     = 1 * time.Minute
 	openAIProbeCacheTTL     = 10 * time.Minute
@@ -130,10 +131,12 @@ type UsageCache struct {
 	antigravityCache    sync.Map           // accountID -> *antigravityUsageCache
 	kiroUsageCache      sync.Map           // accountID -> *kiroUsageCache
 	leonardoUsageCache  sync.Map           // accountID -> *leonardoUsageCache
+	fishUsageCache      sync.Map           // accountID -> *fishUsageCache
 	apiFlight           singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
 	antigravityFlight   singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
 	kiroUsageFlight     singleflight.Group // 防止同一 Kiro 账号的并发请求击穿缓存
 	leonardoUsageFlight singleflight.Group // 防止同一 Leonardo 账号的并发请求击穿缓存
+	fishUsageFlight     singleflight.Group // 防止同一 Fish 账号的并发请求击穿缓存
 	openAIProbeCache    sync.Map           // accountID -> time.Time
 	grokProbeCache      sync.Map           // accountID -> last billing probe attempt
 }
@@ -190,6 +193,14 @@ type AICredit struct {
 	CreditType     string  `json:"credit_type,omitempty"`
 	Amount         float64 `json:"amount,omitempty"`
 	MinimumBalance float64 `json:"minimum_balance,omitempty"`
+}
+
+// FishCreditProgress 表示 Fish 钱包已用额度或每日出图窗口的进度。
+// 进度条按已用/上限填充，与 Kiro credits 相同。
+type FishCreditProgress struct {
+	CurrentUsage   float64 `json:"current_usage"`
+	UsageLimit     float64 `json:"usage_limit"`
+	PercentageUsed float64 `json:"percentage_used"`
 }
 
 // KiroCreditProgress 表示 Kiro 主额度或 Bonus 的用量进度。
@@ -262,6 +273,13 @@ type UsageInfo struct {
 
 	// Antigravity 废弃模型转发规则 (old_model_id -> new_model_id)
 	ModelForwardingRules map[string]string `json:"model_forwarding_rules,omitempty"`
+
+	// Fish token 号：钱包已用/总额进度，以及每日出图窗口。套餐名写入 FishPlan，
+	// 由账号列表写进 credentials.plan_type 后在平台/类型列展示。
+	FishPlan    string              `json:"fish_plan,omitempty"`
+	FishCredits *FishCreditProgress `json:"fish_credits,omitempty"`
+	FishDaily   *FishCreditProgress `json:"fish_daily,omitempty"`
+	FishResetAt *time.Time          `json:"fish_reset_at,omitempty"`
 
 	// Leonardo 积分余额快照（各池剩余量 + 套餐常量表给出的上限）
 	LeonardoPlan         string                   `json:"leonardo_plan,omitempty"`
@@ -427,7 +445,9 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		return s.getPassiveUsageForAccount(ctx, account)
 	}
 
-	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
+	// BPS-only accounts read the same stored windows, refreshed from BPS response
+	// headers; the native Codex probe below never runs for them (IsOAuth).
+	if account.IsOpenAIOAuthCredentialAccount() {
 		// Usage can come from a stored snapshot even when a probe fails. Neither
 		// that nor a working access token proves a rejected refresh token recovered.
 		return s.getOpenAIUsage(ctx, account, forceProbe)
@@ -443,6 +463,10 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 
 	if isKiroDirectModeAccount(account) {
 		return s.getKiroUsage(ctx, account, "active", forceProbe)
+	}
+
+	if isFishTokenAccount(account) {
+		return s.getFishUsage(ctx, account, "active", forceProbe)
 	}
 
 	if account.Platform == PlatformLeonardo && account.Type == AccountTypeOAuth {
@@ -681,6 +705,10 @@ func (s *AccountUsageService) getPassiveUsageForAccount(ctx context.Context, acc
 			return nil, fmt.Errorf("passive usage only supported for Kiro OAuth/APIKey accounts")
 		}
 		return s.getKiroUsage(ctx, account, "passive", false)
+	}
+
+	if isFishTokenAccount(account) {
+		return s.getFishUsage(ctx, account, "passive", false)
 	}
 
 	// Leonardo Cookie 号：被动读取走积分快照缓存（未命中时拉一次），与 Kiro 同构。

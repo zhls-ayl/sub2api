@@ -91,6 +91,32 @@
     <rect x="65.5996" y="44.8008" width="9.6" height="28.8" rx="4.8" />
     <rect x="36.8008" y="44.8008" width="9.6" height="28.8" rx="4.8" />
   </svg>
+  <!-- Fish Audio waveform. Lower bars stay lighter so the mark reads in both themes. -->
+  <svg v-else-if="platform === 'fish'" :class="sizeClass" viewBox="0 0 512 512" fill="currentColor" aria-hidden="true">
+    <g opacity="0.45">
+      <rect x="297.1" y="299.3" width="16" height="21.4" rx="8" />
+      <rect x="328.9" y="276.4" width="16" height="46" rx="8" />
+      <rect x="360.9" y="270.7" width="16" height="51.6" rx="8" />
+      <rect x="392.9" y="264.3" width="16" height="52.1" rx="8" />
+      <rect x="424.7" y="256.6" width="16" height="47.4" rx="8" />
+      <rect x="456.7" y="249.9" width="16" height="27.1" rx="8" />
+    </g>
+    <rect x="38.1" y="200" width="16" height="19.4" rx="8" />
+    <rect x="71" y="202.7" width="16" height="30.7" rx="8" />
+    <rect x="103.9" y="198.4" width="16" height="77.4" rx="8" />
+    <rect x="136.9" y="192" width="16" height="20" rx="8" />
+    <rect x="136.9" y="245.4" width="16" height="58.3" rx="8" />
+    <rect x="168.6" y="235.1" width="16" height="100.8" rx="8" />
+    <rect x="200.6" y="222.4" width="16" height="102.2" rx="8" />
+    <rect x="232.6" y="204.1" width="16" height="115.8" rx="8" />
+    <rect x="264.5" y="190.2" width="16" height="120.1" rx="8" />
+    <rect x="297.1" y="181.9" width="16" height="107.1" rx="8" />
+    <rect x="328.9" y="177" width="16" height="87.8" rx="8" />
+    <rect x="360.9" y="175" width="16" height="86.6" rx="8" />
+    <rect x="392.9" y="178.1" width="16" height="75.4" rx="8" />
+    <rect x="424.7" y="185.2" width="16" height="60.2" rx="8" />
+    <rect x="456.7" y="204.1" width="16" height="38" rx="8" />
+  </svg>
   <!-- Composite group icon -->
   <svg v-else-if="platform === 'composite'" :class="sizeClass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <circle cx="6" cy="12" r="3" />

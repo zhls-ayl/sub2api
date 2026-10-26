@@ -61,6 +61,8 @@ type kiroCacheEmulationPlan struct {
 	usage    *kiroCacheEmulationUsage
 	cacheKey uint64
 	profile  *kiroCacheProfile
+	tracker  *kiroCacheTracker
+	remote   KiroCacheEmulationRemoteStore
 }
 
 func (p *kiroCacheEmulationPlan) result() *kiroCacheEmulationUsage {
@@ -74,7 +76,11 @@ func (p *kiroCacheEmulationPlan) commit() {
 	if p == nil || p.profile == nil || p.cacheKey == 0 {
 		return
 	}
-	globalKiroCacheTracker.update(p.cacheKey, p.profile)
+	tracker := p.tracker
+	if tracker == nil {
+		tracker = globalKiroCacheTracker
+	}
+	tracker.update(p.remote, p.cacheKey, p.profile)
 }
 
 func (s *GatewayService) buildKiroCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
@@ -92,7 +98,7 @@ func (s *GatewayService) prepareKiroCacheEmulationUsage(ctx context.Context, acc
 	if !ok {
 		return nil
 	}
-	return s.prepareKiroCacheEmulationPlanFromProfile(account, group, profile, inputTokens)
+	return s.prepareKiroCacheEmulationPlanFromProfile(ctx, account, group, profile, inputTokens)
 }
 
 func (s *GatewayService) buildKiroResponsesCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
@@ -110,7 +116,7 @@ func (s *GatewayService) prepareKiroResponsesCacheEmulationUsage(ctx context.Con
 	if !ok {
 		return nil
 	}
-	return s.prepareKiroCacheEmulationPlanFromProfile(account, group, profile, inputTokens)
+	return s.prepareKiroCacheEmulationPlanFromProfile(ctx, account, group, profile, inputTokens)
 }
 
 func (s *GatewayService) buildKiroChatCompletionsCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
@@ -132,10 +138,10 @@ func (s *GatewayService) prepareKiroChatCompletionsCacheEmulationUsage(ctx conte
 	if effectiveInputTokens <= 0 {
 		effectiveInputTokens = profile.totalInputTokens
 	}
-	return s.prepareKiroCacheEmulationPlanFromProfile(account, group, profile, effectiveInputTokens)
+	return s.prepareKiroCacheEmulationPlanFromProfile(ctx, account, group, profile, effectiveInputTokens)
 }
 
-func (s *GatewayService) prepareKiroCacheEmulationPlanFromProfile(account *Account, group *Group, profile *kiroCacheProfile, inputTokens int) *kiroCacheEmulationPlan {
+func (s *GatewayService) prepareKiroCacheEmulationPlanFromProfile(ctx context.Context, account *Account, group *Group, profile *kiroCacheProfile, inputTokens int) *kiroCacheEmulationPlan {
 	if group == nil || account == nil || account.ID <= 0 || profile == nil {
 		return nil
 	}
@@ -143,7 +149,8 @@ func (s *GatewayService) prepareKiroCacheEmulationPlanFromProfile(account *Accou
 	if cacheKey == 0 {
 		return nil
 	}
-	result := globalKiroCacheTracker.compute(cacheKey, profile)
+	remote := s.kiroCacheEmulationRemoteStore()
+	result := globalKiroCacheTracker.compute(ctx, remote, cacheKey, profile)
 	if group.EffectiveKiroCacheEmulationMode() == KiroCacheEmulationModeUniform {
 		ratio := group.EffectiveKiroCacheEmulationRatio()
 		result.CacheReadInputTokens = scaleKiroCacheTokens(result.CacheReadInputTokens, ratio)
@@ -168,7 +175,7 @@ func (s *GatewayService) prepareKiroCacheEmulationPlanFromProfile(account *Accou
 	if result.CacheReadInputTokens == 0 && result.CacheCreationInputTokens == 0 {
 		result = nil
 	}
-	return &kiroCacheEmulationPlan{usage: result, cacheKey: cacheKey, profile: profile}
+	return &kiroCacheEmulationPlan{usage: result, cacheKey: cacheKey, profile: profile, tracker: globalKiroCacheTracker, remote: remote}
 }
 
 func scaleKiroCacheCreationTTLTokens(tokens5m, tokens1h, scaledTotal int, ratio float64) (int, int) {
@@ -861,7 +868,7 @@ func (p *kiroCacheProfile) lastCacheableBreakpoint() *kiroResolvedBreakpoint {
 	return &last
 }
 
-func (t *kiroCacheTracker) compute(cacheKey uint64, profile *kiroCacheProfile) *kiroCacheEmulationUsage {
+func (t *kiroCacheTracker) compute(ctx context.Context, remote KiroCacheEmulationRemoteStore, cacheKey uint64, profile *kiroCacheProfile) *kiroCacheEmulationUsage {
 	out := &kiroCacheEmulationUsage{}
 	if t == nil || profile == nil || cacheKey == 0 {
 		return out
@@ -873,7 +880,6 @@ func (t *kiroCacheTracker) compute(cacheKey uint64, profile *kiroCacheProfile) *
 	lastBreakpointTokens := profile.cacheTokensForBreakpoint(lastBreakpoint.cumulativeTokens)
 	now := time.Now()
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.pruneLocked(now)
 
 	matchedTokens := 0
@@ -895,11 +901,55 @@ func (t *kiroCacheTracker) compute(cacheKey uint64, profile *kiroCacheProfile) *
 			break
 		}
 	}
+	t.mu.Unlock()
+
+	// 本地未命中且配置了远端共享存储：把回溯窗口内的候选指纹一次性批量查询
+	// （每请求最多一次远端 RTT），命中的最深条目回填本地后再按本地命中计算。
+	// 远端读写都不能持有本地锁，避免 Redis 延迟串行化所有请求。
+	if matchedTokens == 0 && remote != nil && ctx != nil {
+		matchedTokens = t.lookupRemoteAndBackfill(ctx, remote, cacheKey, profile, now)
+	}
 	newTokens := max(lastBreakpointTokens-matchedTokens, 0)
 	out.CacheReadInputTokens = max(matchedTokens, 0)
 	out.CacheCreationInputTokens = newTokens
 	out.CacheCreation5mInputTokens, out.CacheCreation1hInputTokens = profile.ttlBreakdown(matchedTokens)
 	return out
+}
+
+// lookupRemoteAndBackfill 批量查询远端存储并回填本地。返回命中的 token 数
+// （未命中为 0）。回填条目的 expiresAt 以本机时钟 + 远端报来的 TTL 计算，仅作
+// 本地视图；跨节点存活真值始终是远端 key 自身的 TTL。
+func (t *kiroCacheTracker) lookupRemoteAndBackfill(ctx context.Context, remote KiroCacheEmulationRemoteStore, cacheKey uint64, profile *kiroCacheProfile, now time.Time) int {
+	breakpoints := profile.cacheableBreakpoints()
+	candidates := make([]kiroResolvedBreakpoint, 0, kiroCachePrefixLookbackLimit)
+	fingerprints := make([][32]byte, 0, kiroCachePrefixLookbackLimit)
+	for i, seen := len(breakpoints)-1, 0; i >= 0 && seen < kiroCachePrefixLookbackLimit; i, seen = i-1, seen+1 {
+		candidates = append(candidates, breakpoints[i])
+		fingerprints = append(fingerprints, profile.blocks[breakpoints[i].blockIndex].prefixFingerprint)
+	}
+	alive, err := remote.LookupAlive(ctx, cacheKey, fingerprints)
+	if err != nil {
+		// fail-open：远端不可用时按本地结果继续，等价单机语义。
+		return 0
+	}
+	// candidates 按从深到浅排列，取最深的远端存活断点。
+	for i := range candidates {
+		ttl, ok := alive[fingerprints[i]]
+		if !ok {
+			continue
+		}
+		block := profile.blocks[candidates[i].blockIndex]
+		t.mu.Lock()
+		accountEntries := t.entries[cacheKey]
+		if accountEntries == nil {
+			accountEntries = make(map[[32]byte]kiroCacheEntry)
+			t.entries[cacheKey] = accountEntries
+		}
+		accountEntries[fingerprints[i]] = kiroCacheEntry{tokens: block.cumulativeTokens, ttl: ttl, expiresAt: now.Add(ttl)}
+		t.mu.Unlock()
+		return profile.cacheTokensForBreakpoint(candidates[i].cumulativeTokens)
+	}
+	return 0
 }
 
 func (p *kiroCacheProfile) cacheTokensForBreakpoint(cumulativeTokens int) int {
@@ -932,13 +982,12 @@ func (p *kiroCacheProfile) ttlBreakdown(matchedTokens int) (int, int) {
 	return newTokens, 0
 }
 
-func (t *kiroCacheTracker) update(cacheKey uint64, profile *kiroCacheProfile) {
+func (t *kiroCacheTracker) update(remote KiroCacheEmulationRemoteStore, cacheKey uint64, profile *kiroCacheProfile) {
 	if t == nil || profile == nil || cacheKey == 0 {
 		return
 	}
 	now := time.Now()
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.pruneLocked(now)
 	accountEntries := t.entries[cacheKey]
 	if accountEntries == nil {
@@ -960,6 +1009,28 @@ func (t *kiroCacheTracker) update(cacheKey uint64, profile *kiroCacheProfile) {
 		}
 		accountEntries[block.prefixFingerprint] = kiroCacheEntry{tokens: block.cumulativeTokens, ttl: breakpoint.ttl, expiresAt: expiresAt}
 	}
+	t.mu.Unlock()
+
+	if remote == nil {
+		return
+	}
+	// 远端写入异步执行：不阻塞响应路径；幂等覆盖 + EX 重置即滑动续期。
+	breakpoints := profile.cacheableBreakpoints()
+	entries := make([]KiroCacheRemoteEntry, 0, len(breakpoints))
+	for _, breakpoint := range breakpoints {
+		block := profile.blocks[breakpoint.blockIndex]
+		entries = append(entries, KiroCacheRemoteEntry{
+			Fingerprint: block.prefixFingerprint,
+			Tokens:      block.cumulativeTokens,
+			TTL:         breakpoint.ttl,
+		})
+	}
+	remoteStore, cacheKeyArg := remote, cacheKey
+	kiroCacheEmulationAsyncDispatch(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), kiroCacheEmulationRemoteWriteTimeout)
+		defer cancel()
+		_ = remoteStore.StoreEntries(ctx, cacheKeyArg, entries)
+	})
 }
 
 func (t *kiroCacheTracker) pruneLocked(now time.Time) {

@@ -567,6 +567,69 @@ func TestSettingService_UpdateSettings_AntigravityUserAgentVersion(t *testing.T)
 	require.Equal(t, "1.23.2", repo.updates[SettingKeyAntigravityUserAgentVersion])
 }
 
+func TestSettingService_UpdateSettings_FishImageFitLimits(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	// 正常写入：crop=0（合法：不裁剪）、factor=1.5
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		FishImageMaxCropPixels:    0,
+		FishImageMaxUpscaleFactor: 1.5,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "0", repo.updates[SettingKeyFishImageMaxCropPixels])
+	require.Equal(t, "1.5", repo.updates[SettingKeyFishImageMaxUpscaleFactor])
+
+	// factor 零值视为未设置按默认写 2
+	err = svc.UpdateSettings(context.Background(), &SystemSettings{})
+	require.NoError(t, err)
+	require.Equal(t, "2", repo.updates[SettingKeyFishImageMaxUpscaleFactor])
+}
+
+func TestSettingService_UpdateSettings_FishImageFitLimitsRejectsOutOfRange(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{FishImageMaxCropPixels: 65})
+	require.Error(t, err)
+	require.ErrorContains(t, err, SettingKeyFishImageMaxCropPixels)
+	// 越界是客户端错误：400，不是 500。
+	require.Equal(t, 400, infraerrors.Code(err))
+	require.Equal(t, "INVALID_FISH_IMAGE_FIT_LIMITS", infraerrors.Reason(err))
+
+	err = svc.UpdateSettings(context.Background(), &SystemSettings{FishImageMaxCropPixels: -1})
+	require.Error(t, err)
+
+	err = svc.UpdateSettings(context.Background(), &SystemSettings{FishImageMaxUpscaleFactor: 0.5})
+	require.Error(t, err)
+	require.ErrorContains(t, err, SettingKeyFishImageMaxUpscaleFactor)
+	require.Equal(t, 400, infraerrors.Code(err))
+
+	err = svc.UpdateSettings(context.Background(), &SystemSettings{FishImageMaxUpscaleFactor: 3.5})
+	require.Error(t, err)
+}
+
+func TestParseSettingsFishImageFitLimitsDefaults(t *testing.T) {
+	svc := NewSettingService(&settingUpdateRepoStub{}, &config.Config{})
+	// 缺失 → 默认 4 / 2.0
+	settings := svc.parseSettings(map[string]string{})
+	require.Equal(t, 4, settings.FishImageMaxCropPixels)
+	require.InDelta(t, 2.0, settings.FishImageMaxUpscaleFactor, 1e-9)
+	// 显式 0 / 1（合法下限）与越界回落
+	settings = svc.parseSettings(map[string]string{
+		SettingKeyFishImageMaxCropPixels:    "0",
+		SettingKeyFishImageMaxUpscaleFactor: "1",
+	})
+	require.Equal(t, 0, settings.FishImageMaxCropPixels)
+	require.InDelta(t, 1.0, settings.FishImageMaxUpscaleFactor, 1e-9)
+	settings = svc.parseSettings(map[string]string{
+		SettingKeyFishImageMaxCropPixels:    "garbage",
+		SettingKeyFishImageMaxUpscaleFactor: "99",
+	})
+	require.Equal(t, 4, settings.FishImageMaxCropPixels)
+	require.InDelta(t, 3.0, settings.FishImageMaxUpscaleFactor, 1e-9) // 钳到上限
+}
+
 func TestSettingService_InitializeDefaultSettingsPersistsConfiguredForwardedClientIPHeaders(t *testing.T) {
 	repo := &forwardedIPMigrationRepoStub{values: map[string]string{}}
 	cfg := &config.Config{}

@@ -134,7 +134,7 @@ type CreateAccountRequest struct {
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
 	Platform                string         `json:"platform" binding:"required"`
-	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account bps-oauth"`
 	Credentials             map[string]any `json:"credentials" binding:"required"`
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
@@ -154,7 +154,7 @@ type CreateAccountRequest struct {
 type UpdateAccountRequest struct {
 	Name                    string         `json:"name"`
 	Notes                   *string        `json:"notes"`
-	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account bps-oauth"`
 	Credentials             map[string]any `json:"credentials"`
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
@@ -1434,7 +1434,7 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 // refreshSingleAccount refreshes credentials for a single OAuth account.
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
 func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
-	if !account.IsOAuth() {
+	if !account.IsOAuth() && !account.IsBPSOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
 	// spark 影子凭据由母账号管理、自身恒空,刷新无意义且会先打上游;在调用上游前早拒
@@ -1626,7 +1626,7 @@ func (h *AccountHandler) Refresh(c *gin.Context) {
 
 // ApplyOAuthCredentialsRequest is the payload for persisting re-authorized OAuth credentials.
 type ApplyOAuthCredentialsRequest struct {
-	Type        string         `json:"type" binding:"required,oneof=oauth setup-token"`
+	Type        string         `json:"type" binding:"required,oneof=oauth setup-token bps-oauth"`
 	Credentials map[string]any `json:"credentials" binding:"required"`
 	Extra       map[string]any `json:"extra"`
 }
@@ -1665,7 +1665,7 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		response.NotFound(c, "Account not found")
 		return
 	}
-	if !existing.IsOAuth() {
+	if !existing.IsOAuth() && !existing.IsBPSOAuth() {
 		response.ErrorFrom(c, infraerrors.BadRequest("NOT_OAUTH", "cannot apply oauth credentials to non-OAuth account"))
 		return
 	}
@@ -1735,7 +1735,7 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		updatedAccount = cleared
 	}
 
-	if h.tokenCacheInvalidator != nil && updatedAccount.IsOAuth() {
+	if h.tokenCacheInvalidator != nil && (updatedAccount.IsOAuth() || updatedAccount.IsBPSOAuth()) {
 		if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(ctx, updatedAccount); invalidateErr != nil {
 			slog.Warn("apply_oauth_credentials.invalidate_token_failed",
 				"account_id", accountID,
@@ -1795,7 +1795,7 @@ func (h *AccountHandler) ClearError(c *gin.Context) {
 
 	// 清除错误后，同时清除 token 缓存，确保下次请求会获取最新的 token（触发刷新或从 DB 读取）
 	// 这解决了管理员重置账号状态后，旧的失效 token 仍在缓存中导致立即再次 401 的问题
-	if h.tokenCacheInvalidator != nil && account.IsOAuth() {
+	if h.tokenCacheInvalidator != nil && (account.IsOAuth() || account.IsBPSOAuth()) {
 		if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(c.Request.Context(), account); invalidateErr != nil {
 			log.Printf("[WARN] Failed to invalidate token cache for account %d: %v", accountID, invalidateErr)
 		}
@@ -1996,7 +1996,7 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 			}
 
 			// 清除错误后，同时清除 token 缓存
-			if h.tokenCacheInvalidator != nil && account.IsOAuth() {
+			if h.tokenCacheInvalidator != nil && (account.IsOAuth() || account.IsBPSOAuth()) {
 				if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(gctx, account); invalidateErr != nil {
 					log.Printf("[WARN] Failed to invalidate token cache for account %d: %v", accountID, invalidateErr)
 				}
@@ -2891,6 +2891,45 @@ func leonardoAccountTestModels(account *service.Account) []openai.Model {
 	return models
 }
 
+// fishAccountTestModels 列出 fish 账号测试可选的请求模型。只保留账号真能调度的
+// 对外名；通配符不能直接当请求模型。一个都不剩时回落平台默认模型。
+func fishAccountTestModels(account *service.Account) []openai.Model {
+	requested := make([]string, 0)
+	for model := range account.GetModelMapping() {
+		if strings.Contains(model, "*") || !account.IsModelSupported(model) {
+			continue
+		}
+		requested = append(requested, model)
+	}
+	sort.Strings(requested)
+	if len(requested) == 0 {
+		requested = service.FishModelIDs()
+	}
+	models := make([]openai.Model, 0, len(requested))
+	for _, id := range requested {
+		models = append(models, openai.Model{
+			ID:          id,
+			Object:      "model",
+			Type:        "model",
+			DisplayName: fishTestModelDisplayName(id),
+		})
+	}
+	return models
+}
+
+func fishTestModelDisplayName(id string) string {
+	switch id {
+	case "gpt-image-2":
+		return "GPT Image 2"
+	case "gpt-image-2.5-flare":
+		return "GPT Image 2.5 Flare"
+	case "gpt-image-2.5-sunburst":
+		return "GPT Image 2.5 Sunburst"
+	default:
+		return id
+	}
+}
+
 // GetAvailableModels handles getting available models for an account
 // GET /api/v1/admin/accounts/:id/models
 func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
@@ -2903,6 +2942,13 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
 	if err != nil {
 		response.NotFound(c, "Account not found")
+		return
+	}
+
+	// BPS-only accounts test only their configured models (mapping keys, or the
+	// BPS defaults), never the native defaults.
+	if account.IsBPSOAuth() {
+		response.Success(c, service.ExcelBPSConfiguredModels(account))
 		return
 	}
 
@@ -2979,6 +3025,13 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	// 不能落到下面 OAuth 账号的 Claude 默认模型。
 	if account.Platform == service.PlatformLeonardo {
 		response.Success(c, leonardoAccountTestModels(account))
+		return
+	}
+
+	// fish 只出图：列出这个账号实际能调度的请求模型。返回对象要带 id / display_name，
+	// 测试弹窗的选择器读的是这两个字段。
+	if account.Platform == service.PlatformFish {
+		response.Success(c, fishAccountTestModels(account))
 		return
 	}
 

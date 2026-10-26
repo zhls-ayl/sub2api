@@ -9,7 +9,7 @@
       <span :class="['inline-flex items-center gap-1 px-1.5 py-1', typeClass]">
         <!-- OAuth icon -->
         <svg
-          v-if="type === 'oauth'"
+          v-if="type === 'oauth' || type === 'bps-oauth'"
           class="h-3 w-3"
           fill="none"
           viewBox="0 0 24 24"
@@ -111,6 +111,8 @@ const typeLabel = computed(() => {
   switch (props.type) {
     case 'oauth':
       return 'OAuth'
+    case 'bps-oauth':
+      return 'BPS OAuth'
     case 'setup-token':
       return 'Token'
     case 'apikey':
@@ -271,6 +273,10 @@ const planBadgeClass = computed(() => {
     // Any other non-free Grok plan (future tiers) → amber so it still stands out
     return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   }
+  // Leonardo 套餐（Ultimate / Premium 等）→ 品牌 indigo，与全站 leonardo 配色一致
+  if (props.platform === 'leonardo' && normalizedPlanType.value) {
+    return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+  }
   // OpenAI / other paid plan labels: keep readable distinction from free gray
   if (normalizedPlanType.value === 'plus') {
     return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
@@ -311,8 +317,10 @@ const expiresLabel = computed(() => {
 })
 
 // Privacy badge — shows different states for OpenAI/Antigravity OAuth privacy setting
+// (OpenAI BPS OAuth accounts get the same training opt-out on authorization)
 const privacyBadge = computed(() => {
-  if (props.type !== 'oauth' || !props.privacyMode) return null
+  const privacyCapable = props.type === 'oauth' || (props.platform === 'openai' && props.type === 'bps-oauth')
+  if (!privacyCapable || !props.privacyMode) return null
   // 支持 OpenAI 和 Antigravity 平台
   if (props.platform !== 'openai' && props.platform !== 'antigravity') return null
 

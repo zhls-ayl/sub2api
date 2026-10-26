@@ -427,6 +427,8 @@ const baseSettingsResponse = {
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
   antigravity_user_agent_version: "",
+  fish_image_max_crop_pixels: 4,
+  fish_image_max_upscale_factor: 2,
   openai_codex_user_agent: "",
   openai_codex_ticket_enabled: false,
   openai_codex_ticket_fail_closed: true,
@@ -1370,6 +1372,67 @@ describe("admin SettingsView payment visible method controls", () => {
       expect.objectContaining({
         antigravity_user_agent_version: "1.23.2",
       }),
+    );
+  });
+
+  it("submits fish image fit limits gateway settings", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      fish_image_max_crop_pixels: 8,
+      fish_image_max_upscale_factor: 1.5,
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fish_image_max_crop_pixels: 8,
+        fish_image_max_upscale_factor: 1.5,
+      }),
+    );
+  });
+
+  it("clamps invalid fish image fit limits to defaults on submit", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      fish_image_max_crop_pixels: 999,
+      fish_image_max_upscale_factor: 0,
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fish_image_max_crop_pixels: 64,
+        fish_image_max_upscale_factor: 2,
+      }),
+    );
+  });
+
+  it("submits the default fish crop when the crop input is cleared", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      fish_image_max_crop_pixels: 8,
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper.get('[data-testid="fish-image-max-crop-pixels"]').setValue("");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ fish_image_max_crop_pixels: 4 }),
     );
   });
 

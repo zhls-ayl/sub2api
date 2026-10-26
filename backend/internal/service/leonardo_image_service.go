@@ -346,37 +346,12 @@ func leonardoImageUsage(model, prompt string, credits int, tokensPerCredit, scal
 		scale = 1
 	}
 	outputTokens := int(math.Round(float64(credits) * tokensPerCredit * scale))
-	textTokens := 0
-	if codec, err := openAIInputTokensCodecForModel(model); err == nil {
-		if n, err := codec.Count(prompt); err == nil {
-			textTokens = n
-		}
-	}
-	usage, err := json.Marshal(map[string]any{
-		"input_tokens":          textTokens,
-		"input_tokens_details":  map[string]int{"text_tokens": textTokens, "image_tokens": 0},
-		"output_tokens":         outputTokens,
-		"output_tokens_details": map[string]int{"image_tokens": outputTokens, "text_tokens": 0},
-		"total_tokens":          textTokens + outputTokens,
-	})
-	if err != nil {
-		return nil
-	}
-	return usage
-}
-
-// leonardoQualityTokens 是各质量档 1024x1024 出图的 token 数（gpt-image-1 官方表；
-// XHIGH / MAX 没有公开数据，按 HIGH 计），只用来算质量档之间的倍数。
-var leonardoQualityTokens = map[string]float64{
-	leonardo.QualityLow:    272,
-	leonardo.QualityMedium: 1056,
-	leonardo.QualityHigh:   4160,
-	leonardo.QualityXHigh:  4160,
-	leonardo.QualityMax:    4160,
+	return openAIImageUsageJSON(model, prompt, outputTokens)
 }
 
 // leonardoUsageScale 把实扣积分折回客户请求口径的倍数：超分时乘交付像素 ÷ 出图
-// 像素，质量被账号上限降档时再乘请求档 ÷ 实际档的 token 倍数。
+// 像素，质量被账号上限降档时再乘请求档 ÷ 实际档的 token 倍数（gpt-image-1 官方
+// 表，见 gptImageQualityTokens）。
 func leonardoUsageScale(plan *leonardo.ImagePlan, delivered leonardo.ImageSlot) float64 {
 	scale := 1.0
 	if plan == nil {
@@ -385,7 +360,7 @@ func leonardoUsageScale(plan *leonardo.ImagePlan, delivered leonardo.ImageSlot) 
 	if plan.Upscaled() && plan.Source.Width > 0 && plan.Source.Height > 0 && delivered.Width > 0 && delivered.Height > 0 {
 		scale *= float64(delivered.Width*delivered.Height) / float64(plan.Source.Width*plan.Source.Height)
 	}
-	requested, actual := leonardoQualityTokens[plan.RequestedQuality], leonardoQualityTokens[plan.Quality]
+	requested, actual := gptImageQualityTokens(plan.RequestedQuality), gptImageQualityTokens(plan.Quality)
 	if requested > 0 && actual > 0 {
 		scale *= requested / actual
 	}

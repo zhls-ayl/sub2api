@@ -248,7 +248,7 @@ type SystemSettings struct {
 	EnableClientDatelineNormalization      bool                              // 是否对 Anthropic OAuth/SetupToken 请求体做客户端 dateline 归一化（默认 true）
 	RewriteMessageCacheControl             bool                              // 是否改写 messages[*].content[*].cache_control（默认 false）
 	AntigravityUserAgentVersion            string                            // Antigravity 上游 User-Agent 版本号；空值使用配置/默认值
-	OpenAICodexUserAgent                   string                            // OpenAI Codex 上游完整 User-Agent；空值由 Codex 客户端版本号拼出标准 TUI UA
+	OpenAICodexUserAgent                   string                            // OpenAI Codex 上游完整 User-Agent；空值由 Codex 客户端版本号拼出标准 CLI UA
 	OpenAICodexClientVersion               string                            // 出站声明的 Codex 客户端版本号（管理员覆写）；空值跟随自动同步值
 	OpenAICodexClientVersionSynced         string                            // 自动同步到的官方最新稳定版版本号（只读展示）
 	OpenAICodexVersionAutoSyncEnabled      bool                              // 是否启用 Codex 客户端版本号自动同步（默认 true）
@@ -266,6 +266,8 @@ type SystemSettings struct {
 	CodexCLIOnlyWhitelist                  string                            // codex_cli_only 全局白名单 JSON（[]AllowedClientEntry，AND allow）
 	CodexCLIOnlyAllowAppServerClients      bool                              // codex_cli_only App Server 开关：对未列名客户端开闸（默认 false）
 	CodexCLIOnlyEngineFingerprintSignals   string                            // codex_cli_only 引擎指纹门信号列表 JSON（[]EngineFingerprintSignal）
+	FishImageMaxCropPixels                 int                               // fish 原生号动态尺寸规划最大裁剪量（交付分辨率像素，默认 4；0=不裁剪）
+	FishImageMaxUpscaleFactor              float64                           // fish 原生号动态尺寸规划最大本地放大倍数（默认 2）
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool // 是否启用 web search 模拟

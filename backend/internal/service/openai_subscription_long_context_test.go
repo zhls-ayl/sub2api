@@ -33,6 +33,7 @@ func TestOpenAISubscriptionLongContextExempt(t *testing.T) {
 		{name: "API账号", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}},
 		{name: "其他平台", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth}, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}},
 		{name: "订阅访问令牌", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken}, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}, want: true},
+		{name: "BPS OAuth", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeBPSOAuth}, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}, want: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, openAISubscriptionLongContextExempt(tt.account, tt.result))

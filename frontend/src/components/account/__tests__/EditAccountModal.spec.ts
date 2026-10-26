@@ -60,6 +60,8 @@ vi.mock('vue-i18n', async () => {
 })
 
 import EditAccountModal from '../EditAccountModal.vue'
+import { OPENAI_EXCEL_OAUTH_CLIENT_ID } from '@/composables/useOpenAIOAuth'
+import { DEFAULT_EXCEL_BPS_MODELS } from '@/constants/account'
 
 const BaseDialogStub = defineComponent({
   name: 'BaseDialog',
@@ -76,6 +78,7 @@ const ModelWhitelistSelectorStub = defineComponent({
   name: 'ModelWhitelistSelector',
   props: {
     modelMappings: { type: Array, default: () => [] },
+    availableModels: { type: Array, default: undefined },
     modelValue: {
       type: Array,
       default: () => []
@@ -1092,6 +1095,108 @@ describe('EditAccountModal', () => {
     )
   })
 
+  it('keeps plan_type on save for Codex OAuth accounts', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = { access_token: 'token', plan_type: 'plus' }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="excel-bps-section"]').exists()).toBe(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.plan_type).toBe('plus')
+  })
+
+  it('edits only BPS settings on BPS OAuth accounts and drops the legacy BPS whitelist', async () => {
+    const account = buildAccount()
+    account.type = 'bps-oauth'
+    account.credentials = {
+      access_token: 'token',
+      client_id: OPENAI_EXCEL_OAUTH_CLIENT_ID,
+      model_mapping: { 'gpt-5.6-sol': 'gpt-5.6-sol' }
+    }
+    account.extra = { openai_excel_bps_models: ['gpt-5.6-sol'] }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const bpsSection = wrapper.get('[data-testid="excel-bps-section"]')
+    expect(wrapper.find('[data-testid="excel-bps-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="edit-openai-flatten-namespaces-toggle"]').exists()).toBe(false)
+    // BPS 区块只剩两个开关，模型只由通用模型限制决定
+    expect(wrapper.find('[data-testid="excel-bps-all-models"]').exists()).toBe(false)
+    expect(bpsSection.findComponent({ name: 'ModelWhitelistSelector' }).exists()).toBe(false)
+    expect(bpsSection.find('[data-testid="excel-bps-cache-creation-as-input"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="excel-bps-ignore-encrypted-content"]').setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1] ?? {}
+    const extra = payload.extra ?? {}
+    expect(extra).not.toHaveProperty('openai_excel_bps_models')
+    expect(extra).not.toHaveProperty('openai_excel_bps')
+    expect(extra.openai_excel_bps_ignore_encrypted_content).toBe(true)
+    expect(extra).not.toHaveProperty('openai_oauth_responses_websockets_v2_mode')
+    expect(extra).not.toHaveProperty('codex_fingerprint_mode')
+    expect(payload.credentials?.model_mapping).toEqual({ 'gpt-5.6-sol': 'gpt-5.6-sol' })
+  })
+
+  it('limits BPS OAuth model candidates and quick-add presets to BPS models', async () => {
+    const account = buildAccount()
+    account.type = 'bps-oauth'
+    account.credentials = {
+      access_token: 'token',
+      client_id: OPENAI_EXCEL_OAUTH_CLIENT_ID,
+      model_mapping: { 'gpt-5.6-sol': 'gpt-5.6-sol', 'bps-custom': 'bps-custom' }
+    }
+
+    const wrapper = mountModal(account)
+    const selector = wrapper.getComponent(ModelWhitelistSelectorStub)
+    expect(selector.props('availableModels')).toEqual([...DEFAULT_EXCEL_BPS_MODELS, 'bps-custom'])
+
+    // 「同步上游模型」把结果追加到已选；取消勾选后仍留在候选里
+    selector.vm.$emit('update:modelValue', ['gpt-5.6-sol', 'bps-custom', 'bps-synced'])
+    await flushPromises()
+    selector.vm.$emit('update:modelValue', ['gpt-5.6-sol'])
+    await flushPromises()
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('availableModels')).toEqual([
+      ...DEFAULT_EXCEL_BPS_MODELS,
+      'bps-custom',
+      'bps-synced'
+    ])
+
+    const mappingTab = wrapper.findAll('button').find(btn => btn.text() === 'admin.accounts.modelMapping')
+    await mappingTab!.trigger('click')
+    expect(wrapper.findAll('[data-testid="oauth-preset-mapping"]').map(btn => btn.text())).toEqual([
+      '+ GPT-6 Astra',
+      '+ GPT-5.6 Sol',
+      '+ GPT-5.6 Terra'
+    ])
+  })
+
+  it('keeps native model candidates and presets for Codex OAuth accounts', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = { access_token: 'token', model_mapping: { 'gpt-5.2': 'gpt-5.2' } }
+
+    const wrapper = mountModal(account)
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('availableModels')).toBeUndefined()
+
+    const mappingTab = wrapper.findAll('button').find(btn => btn.text() === 'admin.accounts.modelMapping')
+    await mappingTab!.trigger('click')
+    const presets = wrapper.findAll('[data-testid="oauth-preset-mapping"]').map(btn => btn.text())
+    expect(presets).toContain('+ GPT-4o')
+    expect(presets).toContain('+ GPT-5.4')
+  })
+
   it('writes the upstream request id header into extra only when it changes', async () => {
     const account = buildAccount()
     account.extra = { openai_compact_mode: 'force_on' }
@@ -1844,6 +1949,44 @@ describe('EditAccountModal', () => {
     })
   })
 
+  it('hydrates and submits Fish native max quality', async () => {
+    const account = {
+      ...buildAccount(),
+      id: 21,
+      name: 'Fish Token',
+      platform: 'fish',
+      type: 'apikey',
+      credentials: {},
+      extra: { fish_max_quality: 'high' }
+    } as any
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const quality = wrapper.get<HTMLSelectElement>('[data-testid="fish-max-quality"]')
+    expect(quality.element.value).toBe('high')
+
+    await quality.setValue('medium')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(extra?.fish_max_quality).toBe('medium')
+  })
+
+  it('does not show Fish max quality for relay accounts', () => {
+    const account = {
+      ...buildAccount(),
+      id: 22,
+      name: 'Fish Relay',
+      platform: 'fish',
+      type: 'apikey',
+      credentials: { base_url: 'https://api.openai.com' }
+    } as any
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="fish-max-quality"]').exists()).toBe(false)
+  })
+
   it('does not show the Leonardo credit unit price for relay accounts', () => {
     const account = {
       ...buildGrokAPIKeyAccount(),
@@ -1954,6 +2097,26 @@ describe('EditAccountModal', () => {
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows quota limit card for Vertex SA account and keeps quota limits on save', async () => {
+    const account = buildVertexAccount()
+    account.extra = { quota_limit: 200, quota_daily_limit: 20, quota_used: 35.5 }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.findComponent({ name: 'QuotaLimitCard' }).exists()).toBe(true)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(extra?.quota_limit).toBe(200)
+    expect(extra?.quota_daily_limit).toBe(20)
+    expect(extra?.quota_weekly_limit).toBeUndefined()
   })
 
   it('blocks Vertex SA save when neither credentials_status nor legacy json indicates existence', async () => {
