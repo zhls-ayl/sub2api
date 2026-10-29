@@ -447,6 +447,10 @@ func IsKiroGPTModel(modelID string) bool {
 // kiroMaxOutputTokensForModel 返回模型在 Kiro 上游允许的最大输出 token 数，
 // 对齐 Kiro 官方模型卡片的「最大输出」一栏：GPT-5.6 三兄弟、Opus 4.7+、
 // Sonnet 5.5+ 是 128000；Sonnet 5、Opus 4.6 与各 4.5 及未知模型统一 64000。
+//
+// 上游曾把这里压成一律 64000。自维护版本保留原分档：账号已同步的
+// ListAvailableModels tokenLimits 仍优先，没有记录时才按模型名猜测。
+// Haiku（含上游新增的 Haiku 5.5）和 Kimi K3 不在 128000 档，保持 64000。
 func kiroMaxOutputTokensForModel(model string) int {
 	normalized := normalizeModelAlias(model)
 	if IsKiroGPTModel(normalized) || isKiro128KOutputClaude(normalized) {
@@ -458,7 +462,7 @@ func kiroMaxOutputTokensForModel(model string) int {
 // isKiro128KOutputClaude 判断 Claude 模型在 Kiro 上游是否开放 128000 输出上限。
 // Opus 4.7 及以上、Sonnet 5.5 及以上；Sonnet 5 仍是 64000，不能按「主版本 >= 5」
 // 一刀切。与 isKiroHighCapabilityClaude（管 thinking 行为）刻意分开：两者的模型
-// 集合不同，Sonnet 5 属高能力档但输出上限仍是 64000。
+// 集合不同，Sonnet 5 属高能力档但输出上限仍是 64000。Haiku 不在此列。
 func isKiro128KOutputClaude(model string) bool {
 	family, major, minor, hasMinor, ok := claudeOpusSonnetVersion(model)
 	if !ok {
