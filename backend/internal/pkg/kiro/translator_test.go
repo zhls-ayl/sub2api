@@ -3176,7 +3176,8 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 }
 
 // 逐条对齐 Kiro 官方模型卡片的「最大输出」一栏。DefaultModels 里每个模型都要有
-// 期望值，新增模型忘了归类会立刻失败。
+// 期望值，新增模型忘了归类会立刻失败。上游新增的 Kimi K3 与 Haiku 5.5 不在
+// 128000 档，保持默认 64000。
 func TestKiroMaxOutputTokensMatchesOfficialLimits(t *testing.T) {
 	t.Parallel()
 
@@ -3184,6 +3185,7 @@ func TestKiroMaxOutputTokensMatchesOfficialLimits(t *testing.T) {
 		"gpt-5.6-sol":                         128000,
 		"gpt-5.6-terra":                       128000,
 		"gpt-5.6-luna":                        128000,
+		"kimi-k3":                             kiroDefaultMaxOutputTokens,
 		"claude-opus-4-8":                     128000,
 		"claude-opus-4-8-thinking":            128000,
 		"claude-opus-4-7":                     128000,
@@ -3206,6 +3208,8 @@ func TestKiroMaxOutputTokensMatchesOfficialLimits(t *testing.T) {
 		"claude-sonnet-4-5-20250929-thinking": kiroDefaultMaxOutputTokens,
 		"claude-haiku-4-5-20251001":           kiroDefaultMaxOutputTokens,
 		"claude-haiku-4-5-20251001-thinking":  kiroDefaultMaxOutputTokens,
+		"claude-haiku-5-5":                    kiroDefaultMaxOutputTokens,
+		"claude-haiku-5-5-thinking":           kiroDefaultMaxOutputTokens,
 	}
 	for model, want := range expected {
 		require.Equal(t, want, kiroMaxOutputTokensForModel(model), model)
@@ -3224,6 +3228,9 @@ func TestKiroMaxOutputTokensMatchesOfficialLimits(t *testing.T) {
 	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("claude-sonnet-5.0"))
 	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("claude-sonnet-5.0-thinking"))
 	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("gpt-5.6"))
+	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("claude-haiku-5-5"))
+	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("claude-haiku-5-5-thinking"))
+	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("kimi-k3"))
 }
 
 func TestKiroMaxOutputTokensForOpus5(t *testing.T) {
