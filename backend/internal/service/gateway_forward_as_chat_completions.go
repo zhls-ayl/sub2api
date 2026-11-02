@@ -69,7 +69,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			mappedModel = normalized
 		}
 	}
-	if err := validateClaude55Request(body, mappedModel); err != nil {
+	if err := validateClaude55RequestForAccount(body, account, mappedModel); err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -143,7 +143,11 @@ func (s *GatewayService) ForwardAsChatCompletions(
 				Kind:               "request_error",
 				Message:            safeErr,
 			})
-			writeGatewayCCError(c, http.StatusBadGateway, "server_error", "Upstream request failed")
+			if msg, ok := kiroPayloadTooLargeMessage(err); ok {
+				writeGatewayCCError(c, http.StatusBadRequest, "invalid_request_error", msg)
+			} else {
+				writeGatewayCCError(c, http.StatusBadGateway, "server_error", "Upstream request failed")
+			}
 			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 		}
 	} else {
