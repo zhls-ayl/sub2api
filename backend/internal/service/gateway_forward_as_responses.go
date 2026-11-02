@@ -80,7 +80,7 @@ func (s *GatewayService) ForwardAsResponses(
 			mappedModel = normalized
 		}
 	}
-	if err := validateClaude55Request(body, mappedModel); err != nil {
+	if err := validateClaude55RequestForAccount(body, account, mappedModel); err != nil {
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func (s *GatewayService) ForwardAsResponses(
 		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, parsed, anthropicBody, mappedModel, originalModel, c.Request.Header, group, cachePlan)
 		if err != nil {
 			if tooLong, ok := kiroPromptTooLongFrom(err); ok {
-				writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", tooLong.Error())
+				writeResponsesError(c, http.StatusBadRequest, tooLong.responsesErrorCode(), tooLong.Error())
 				return nil, tooLong
 			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
@@ -185,7 +185,11 @@ func (s *GatewayService) ForwardAsResponses(
 				Kind:               "request_error",
 				Message:            safeErr,
 			})
-			writeResponsesError(c, http.StatusBadGateway, "server_error", "Upstream request failed")
+			if msg, ok := kiroPayloadTooLargeMessage(err); ok {
+				writeResponsesError(c, http.StatusBadRequest, "context_length_exceeded", msg)
+			} else {
+				writeResponsesError(c, http.StatusBadGateway, "server_error", "Upstream request failed")
+			}
 			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 		}
 	} else {

@@ -72,6 +72,7 @@ func ProvideAuthService(
 	defaultSubAssigner DefaultSubscriptionAssigner,
 	affiliateService *AffiliateService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	mcpOAuthService *MCPOAuthService,
 ) *AuthService {
 	svc := NewAuthService(
 		entClient,
@@ -90,6 +91,9 @@ func ProvideAuthService(
 	)
 	svc.SetTencentCaptchaService(tencentCaptchaService)
 	svc.SetAliyunCaptchaService(aliyunCaptchaService)
+	if mcpOAuthService != nil {
+		svc.SetMCPGrantRevoker(mcpOAuthService)
+	}
 	return svc
 }
 
@@ -340,6 +344,25 @@ func ProvideCNProviderBalanceCheckService(
 		minutes = cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes
 	}
 	svc := NewCNProviderBalanceCheckService(accountRepo, balanceService, quotaService, cfg, time.Duration(minutes)*time.Minute)
+	svc.Start()
+	return svc
+}
+
+// ProvideFishQuotaSweepService 构造并启动 fish 周期配额巡检任务。
+// 每轮对全部 active 的 fish token 号拉一次 entitlements（复用用量服务的缓存/
+// singleflight/代理路由），看到每日出图次数耗尽即落冷却到重置时刻——不依赖
+// 请求流量和管理端看列表。
+// 间隔取自 gateway.fish.quota_sweep_interval_minutes；<=0 或未配置时不启动。
+func ProvideFishQuotaSweepService(
+	accountRepo AccountRepository,
+	usage *AccountUsageService,
+	cfg *config.Config,
+) *FishQuotaSweepService {
+	minutes := 0
+	if cfg != nil && cfg.Gateway.Fish.QuotaSweepIntervalMinutes > 0 {
+		minutes = cfg.Gateway.Fish.QuotaSweepIntervalMinutes
+	}
+	svc := NewFishQuotaSweepService(accountRepo, usage, time.Duration(minutes)*time.Minute)
 	svc.Start()
 	return svc
 }
@@ -909,6 +932,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAuthService,
 	NewPasskeyService,
 	NewUserService,
+	NewMCPOAuthService,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	ProvideAuthCacheInvalidationWorker,
@@ -968,6 +992,7 @@ var ProviderSet = wire.NewSet(
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,
 	ProvideAccountUsageService,
+	ProvideFishQuotaSweepService,
 	ProvideAccountTestService,
 	ProvideUpstreamBillingProbeService,
 	ProvideOllamaCloudUsageService,
