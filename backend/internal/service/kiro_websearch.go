@@ -51,9 +51,9 @@ func (w *kiroStreamChunkCollector) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func bufferKiroAnthropicStream(ctx context.Context, body io.Reader, responseModel string, inputTokens int) ([][]byte, *kiropkg.StreamResult, error) {
+func bufferKiroAnthropicStream(ctx context.Context, body io.Reader, responseModel string, inputTokens int, requestCtx kiropkg.KiroRequestContext) ([][]byte, *kiropkg.StreamResult, error) {
 	collector := &kiroStreamChunkCollector{}
-	result, err := kiropkg.StreamEventStreamAsAnthropicWithContext(ctx, body, collector, responseModel, inputTokens, kiropkg.KiroRequestContext{})
+	result, err := kiropkg.StreamEventStreamAsAnthropicWithContext(ctx, body, collector, responseModel, inputTokens, requestCtx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -67,7 +67,7 @@ func bufferKiroAnthropicStream(ctx context.Context, body io.Reader, responseMode
 // and the request is not billed.
 func writeKiroWebSearchFinalRound(w io.Writer, chunks [][]byte, indexOffset int, result *kiropkg.StreamResult, webSearchRequests int, renameRemoteWebSearch bool) error {
 	for _, chunk := range chunks {
-		adjusted, shouldForward := kiropkg.AdjustSSEChunk(chunk, indexOffset)
+		adjusted, shouldForward := kiropkg.DropSSEMessageEnvelope(chunk, indexOffset)
 		if !shouldForward {
 			continue
 		}
@@ -100,6 +100,21 @@ func writeKiroWebSearchStreamTermination(w io.Writer, result *kiropkg.StreamResu
 	usage := map[string]any{
 		"output_tokens": outputTokens,
 	}
+	// 只有解析器按 contextUsage 重算过、并带上缓存拆分时，才把 input 写进结束事件。
+	// 裸的估算 input（例如联网循环里补上的 inputTokens）不能覆盖 message_start 的缓存拆分。
+	if result != nil && kiroUsageHasCacheSplit(result.Usage) {
+		if result.Usage.InputTokens > 0 {
+			usage["input_tokens"] = result.Usage.InputTokens
+		}
+		usage["cache_read_input_tokens"] = result.Usage.CacheReadInputTokens
+		usage["cache_creation_input_tokens"] = result.Usage.CacheCreationInputTokens
+		if result.Usage.CacheCreation5mInputTokens > 0 || result.Usage.CacheCreation1hInputTokens > 0 {
+			usage["cache_creation"] = map[string]any{
+				"ephemeral_5m_input_tokens": result.Usage.CacheCreation5mInputTokens,
+				"ephemeral_1h_input_tokens": result.Usage.CacheCreation1hInputTokens,
+			}
+		}
+	}
 	if webSearchRequests > 0 {
 		usage["server_tool_use"] = map[string]any{
 			"web_search_requests": webSearchRequests,
@@ -128,6 +143,13 @@ func writeKiroWebSearchStreamTermination(w io.Writer, result *kiropkg.StreamResu
 	}
 	_, err = io.WriteString(w, "event: message_stop\ndata: "+string(stop)+"\n\n")
 	return err
+}
+
+func kiroUsageHasCacheSplit(usage kiropkg.Usage) bool {
+	return usage.CacheReadInputTokens > 0 ||
+		usage.CacheCreationInputTokens > 0 ||
+		usage.CacheCreation5mInputTokens > 0 ||
+		usage.CacheCreation1hInputTokens > 0
 }
 
 func writeSSEChunks(w io.Writer, chunks [][]byte) error {

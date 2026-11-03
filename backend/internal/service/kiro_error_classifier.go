@@ -14,6 +14,7 @@ const (
 	kiroErrorMonthlyRequest         = "monthly_request_count"
 	kiroErrorProfileError           = "profile_error"
 	kiroErrorQuotaExhausted         = "quota_exhausted"
+	kiroErrorOverageExhausted       = "overage_exhausted"
 	kiroErrorRateLimited            = "rate_limited"
 	kiroErrorSuspended              = "suspended"
 	kiroErrorUsageForbidden         = "usage_forbidden"
@@ -24,11 +25,16 @@ const (
 	kiroErrorBadRequestInvalidModel = "bad_request_invalid_model"
 	kiroErrorBadRequestAuth         = "bad_request_auth"
 	kiroErrorBadRequestQuota        = "bad_request_quota"
-	kiroErrorBadRequestUnknown      = "bad_request_unknown"
-	kiroErrorRefreshTokenInvalid    = "refresh_token_invalid"
+	// kiroErrorBadRequestContextLength 是上游的「输入太长」：单字段超限报
+	// CONTENT_LENGTH_EXCEEDS_THRESHOLD，整体超限报 "Input is too long"。
+	kiroErrorBadRequestContextLength = "bad_request_context_length"
+	kiroErrorBadRequestUnknown       = "bad_request_unknown"
+	kiroErrorRefreshTokenInvalid     = "refresh_token_invalid"
 
 	kiroQuotaStateNormal           = "normal"
+	kiroQuotaStateOverageActive    = "overage_active"
 	kiroQuotaStateCreditsExhausted = "credits_exhausted"
+	kiroQuotaStateOverageExhausted = "overage_exhausted"
 )
 
 type kiroErrorClassification struct {
@@ -54,6 +60,8 @@ func classifyKiroHTTPError(statusCode int, body string) kiroErrorClassification 
 		return classifyKiroBadRequest(trimmed, lower)
 	case statusCode == http.StatusForbidden && isKiroTokenErrorBody([]byte(trimmed)):
 		return kiroErrorClassification{Category: kiroErrorAuthError, StatusCode: statusCode, Message: trimmed}
+	case looksLikeKiroOverageExhaustedError(lower):
+		return kiroErrorClassification{Category: kiroErrorOverageExhausted, StatusCode: statusCode, Message: trimmed}
 	case looksLikeKiroQuotaExhaustedError(lower):
 		return kiroErrorClassification{Category: kiroErrorQuotaExhausted, StatusCode: statusCode, Message: trimmed}
 	case statusCode == http.StatusTooManyRequests:
@@ -86,6 +94,8 @@ func classifyKiroError(err error) kiroErrorClassification {
 		return kiroErrorClassification{Category: kiroErrorMonthlyRequest, Message: errStr}
 	case looksLikeKiroProfileError(lower):
 		return kiroErrorClassification{Category: kiroErrorProfileError, Message: errStr}
+	case looksLikeKiroOverageExhaustedError(lower):
+		return kiroErrorClassification{Category: kiroErrorOverageExhausted, Message: errStr}
 	case looksLikeKiroQuotaExhaustedError(lower):
 		return kiroErrorClassification{Category: kiroErrorQuotaExhausted, Message: errStr}
 	case strings.Contains(lower, "context deadline exceeded"),
@@ -101,6 +111,8 @@ func classifyKiroBadRequest(trimmed, lower string) kiroErrorClassification {
 	switch {
 	case looksLikeKiroContentLengthError(trimmed):
 		return kiroErrorClassification{Category: kiroErrorContentLength, StatusCode: http.StatusBadRequest, Message: trimmed}
+	case looksLikeKiroContextLengthError(lower):
+		return kiroErrorClassification{Category: kiroErrorBadRequestContextLength, StatusCode: http.StatusBadRequest, Message: trimmed}
 	case looksLikeKiroBadRequestSchemaError(lower):
 		return kiroErrorClassification{Category: kiroErrorBadRequestSchema, StatusCode: http.StatusBadRequest, Message: trimmed}
 	case looksLikeKiroBadRequestToolPairingError(lower):
@@ -132,6 +144,10 @@ func looksLikeKiroContentLengthError(body string) bool {
 		reason = gjson.Get(trimmed, "error.reason").String()
 	}
 	return reason == "CONTENT_LENGTH_EXCEEDS_THRESHOLD"
+}
+
+func looksLikeKiroContextLengthError(lower string) bool {
+	return strings.Contains(lower, "input is too long")
 }
 
 func looksLikeKiroBadRequestSchemaError(lower string) bool {
@@ -206,6 +222,20 @@ func looksLikeKiroProfileError(lower string) bool {
 		(strings.Contains(lower, "profile") && strings.Contains(lower, "not found")) ||
 		(strings.Contains(lower, "invalid profile")) ||
 		(strings.Contains(lower, "listavailableprofiles"))
+}
+
+// looksLikeKiroOverageExhaustedError 识别超刷额度本身也用尽的报错:
+// 上游返回 429 且消息包含 overage 与耗尽/未开启等关键词。
+func looksLikeKiroOverageExhaustedError(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "overage") &&
+		(strings.Contains(lower, "exhaust") ||
+			strings.Contains(lower, "disabled") ||
+			strings.Contains(lower, "not enabled") ||
+			strings.Contains(lower, "not allowed") ||
+			strings.Contains(lower, "limit"))
 }
 
 func looksLikeKiroQuotaExhaustedError(lower string) bool {

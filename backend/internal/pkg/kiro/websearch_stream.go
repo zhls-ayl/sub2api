@@ -210,7 +210,7 @@ func FilterChunksDroppingIndices(chunks [][]byte, toolIndices []int, indexOffset
 	}
 	filtered := make([][]byte, 0, len(chunks))
 	for _, chunk := range chunks {
-		adjusted, shouldForward := filterSSEChunkDrop(chunk, drop, indexOffset)
+		adjusted, shouldForward := filterSSEChunkDrop(chunk, drop, indexOffset, false)
 		if shouldForward {
 			filtered = append(filtered, adjusted)
 		}
@@ -262,8 +262,16 @@ func RenameRemoteWebSearchInSSEChunk(chunk []byte) []byte {
 	return []byte(strings.Join(lines, "\n"))
 }
 
+// AdjustSSEChunk 处理最后一轮直接转发的流：message_start 已在开头单独发过，这里去掉；
+// message_delta / message_stop 必须转发，否则客户端收不到结束事件和最终用量。
 func AdjustSSEChunk(chunk []byte, offset int) ([]byte, bool) {
-	return filterSSEChunk(chunk, -1, offset)
+	return filterSSEChunkDrop(chunk, nil, offset, true)
+}
+
+// DropSSEMessageEnvelope 去掉 message_start / message_delta / message_stop 并平移块下标。
+// 调用方自己补结束事件时用它，避免上游原始 usage 覆盖 message_start 里已经按缓存拆好的 input。
+func DropSSEMessageEnvelope(chunk []byte, offset int) ([]byte, bool) {
+	return filterSSEChunkDrop(chunk, nil, offset, false)
 }
 
 func MaxContentBlockIndex(chunks [][]byte) int {
@@ -293,15 +301,17 @@ func MaxContentBlockIndex(chunks [][]byte) int {
 	return maxIndex
 }
 
-func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byte, bool) {
+func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int, keepMessageEnd bool) ([]byte, bool) {
 	drop := map[int]struct{}{}
 	if webSearchToolUseIndex >= 0 {
 		drop[webSearchToolUseIndex] = struct{}{}
 	}
-	return filterSSEChunkDrop(chunk, drop, indexOffset)
+	return filterSSEChunkDrop(chunk, drop, indexOffset, keepMessageEnd)
 }
 
-func filterSSEChunkDrop(chunk []byte, drop map[int]struct{}, indexOffset int) ([]byte, bool) {
+// filterSSEChunkDrop 去掉不该给客户端的事件并平移块下标。keepMessageEnd 为 false 时
+// 连 message_delta / message_stop 一起去掉（中间轮次，或调用方自己补结束事件）。
+func filterSSEChunkDrop(chunk []byte, drop map[int]struct{}, indexOffset int, keepMessageEnd bool) ([]byte, bool) {
 	lines := strings.Split(string(chunk), "\n")
 	var builder strings.Builder
 	hasContent := false
@@ -311,7 +321,7 @@ func filterSSEChunkDrop(chunk []byte, drop map[int]struct{}, indexOffset int) ([
 		if strings.HasPrefix(line, "event: ") {
 			if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "data: ") {
 				payload := strings.TrimSpace(strings.TrimPrefix(lines[i+1], "data: "))
-				if shouldSuppressEventPayloadSet(payload, drop) {
+				if shouldSuppressEventPayloadSet(payload, drop, keepMessageEnd) {
 					i++
 					continue
 				}
@@ -326,7 +336,7 @@ func filterSSEChunkDrop(chunk []byte, drop map[int]struct{}, indexOffset int) ([
 			if payload == "[DONE]" {
 				continue
 			}
-			if shouldSuppressEventPayloadSet(payload, drop) {
+			if shouldSuppressEventPayloadSet(payload, drop, keepMessageEnd) {
 				continue
 			}
 			adjusted := adjustEventPayload(payload, indexOffset)
@@ -350,7 +360,7 @@ func filterSSEChunkDrop(chunk []byte, drop map[int]struct{}, indexOffset int) ([
 	return []byte(builder.String()), true
 }
 
-func shouldSuppressEventPayloadSet(payload string, drop map[int]struct{}) bool {
+func shouldSuppressEventPayloadSet(payload string, drop map[int]struct{}, keepMessageEnd bool) bool {
 	if payload == "" {
 		return false
 	}
@@ -358,13 +368,14 @@ func shouldSuppressEventPayloadSet(payload string, drop map[int]struct{}) bool {
 	if err := json.Unmarshal([]byte(payload), &event); err != nil {
 		return false
 	}
-	eventType, _ := event["type"].(string)
-	// message_start is written once by the caller. message_delta/message_stop are
-	// dropped here so an intermediate search round cannot end the stream, and so
-	// the raw delta cannot overwrite the cache-adjusted input tokens from
-	// message_start. The final round must emit its own message_delta + message_stop.
-	if eventType == "message_start" || eventType == "message_delta" || eventType == "message_stop" {
+	// message_start is written once by the caller. Intermediate rounds also drop
+	// message_delta/message_stop so they cannot end the stream. keepMessageEnd
+	// forwards those two events on a final round that is relayed as-is.
+	switch eventType, _ := event["type"].(string); eventType {
+	case "message_start":
 		return true
+	case "message_delta", "message_stop":
+		return !keepMessageEnd
 	}
 	if len(drop) == 0 {
 		return false

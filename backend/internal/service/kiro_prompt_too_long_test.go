@@ -49,6 +49,7 @@ func TestForwardKiroMessagesPromptTooLong(t *testing.T) {
 		upstreamBody string
 		wantUpstream int
 		wantNumbers  bool
+		wantFixed    bool
 	}{
 		{
 			name:         "over max input tokens",
@@ -68,21 +69,28 @@ func TestForwardKiroMessagesPromptTooLong(t *testing.T) {
 			wantNumbers:  true,
 		},
 		{
+			// 上游已改为超大请求原样透传，不再本地按字节裁历史。
+			// 没有已同步的 maxInputTokens 时，上游 400 用固定上下文文案，不用 prompt is too long。
 			name:         "byte truncation cannot fit",
 			body:         oversizedBody,
-			wantUpstream: 0,
+			upstreamBody: contentLengthBody,
+			wantUpstream: 1,
+			wantFixed:    true,
 		},
 		{
 			name:         "byte truncation cannot fit stream",
 			stream:       true,
 			body:         oversizedBody,
-			wantUpstream: 0,
+			upstreamBody: contentLengthBody,
+			wantUpstream: 1,
+			wantFixed:    true,
 		},
 		{
 			name:         "upstream content length",
 			body:         shortBody,
 			upstreamBody: contentLengthBody,
 			wantUpstream: 1,
+			wantFixed:    true,
 		},
 		{
 			name:         "upstream content length stream",
@@ -90,6 +98,7 @@ func TestForwardKiroMessagesPromptTooLong(t *testing.T) {
 			body:         shortBody,
 			upstreamBody: contentLengthBody,
 			wantUpstream: 1,
+			wantFixed:    true,
 		},
 	}
 
@@ -115,7 +124,12 @@ func TestForwardKiroMessagesPromptTooLong(t *testing.T) {
 			require.Error(t, err)
 			var failover *UpstreamFailoverError
 			require.NotErrorAs(t, err, &failover)
-			requireKiroPromptTooLongResponse(t, rec, tt.wantNumbers)
+			if tt.wantFixed {
+				require.Equal(t, http.StatusBadRequest, rec.Code)
+				require.Equal(t, kiroContextWindowFullMessage, gjson.Get(rec.Body.String(), "error.message").String())
+			} else {
+				requireKiroPromptTooLongResponse(t, rec, tt.wantNumbers)
+			}
 			require.Len(t, upstream.requests, tt.wantUpstream)
 			require.False(t, repo.called)
 			require.False(t, repo.rateCalled)
