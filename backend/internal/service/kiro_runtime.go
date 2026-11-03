@@ -120,15 +120,28 @@ func resolveKiroUpstreamModel(mappedModel string) string {
 	return upstreamModel
 }
 
-// kiroPayloadTooLargeMessage 判断 err 是否为「裁掉旧历史后仍超过 Kiro 体积上限」，
-// 并给出面向客户端的错误文案。文案以 Anthropic 上下文超限错误的 "prompt is too long"
-// 开头，让 Claude Code 等客户端按上下文问题处理（压缩），而不是把它当 5xx 原样重试。
-func kiroPayloadTooLargeMessage(err error) (string, bool) {
-	var tooLarge *kiropkg.PayloadTooLargeError
-	if !errors.As(err, &tooLarge) {
+// Kiro 上游「输入太长」时返回给客户端的固定文案，与 kiro.rs map_provider_error 一致。
+// 不回显上游原文（可能带 request ID 等内部细节），原文只进日志。
+const (
+	kiroContextWindowFullMessage = "Context window is full. Reduce conversation history, system prompt, or tools."
+	kiroInputTooLongMessage      = "Input is too long. Reduce the size of your messages."
+)
+
+// kiroContextLengthClientMessage 判断 Kiro 上游 400 是否为「输入太长」，是则返回固定文案：
+// CONTENT_LENGTH_EXCEEDS_THRESHOLD 视为上下文窗口已满，其余 "Input is too long" 视为单次输入太长。
+func kiroContextLengthClientMessage(statusCode int, body []byte) (string, bool) {
+	if statusCode != http.StatusBadRequest {
 		return "", false
 	}
-	return fmt.Sprintf("prompt is too long: request exceeds the Kiro upstream limit of %d bytes even after trimming old history", tooLarge.LimitBytes), true
+	switch classifyKiroHTTPError(statusCode, string(body)).Category {
+	case kiroErrorBadRequestContextLength, kiroErrorContentLength:
+	default:
+		return "", false
+	}
+	if strings.Contains(strings.ToLower(string(body)), "content_length_exceeds_threshold") {
+		return kiroContextWindowFullMessage, true
+	}
+	return kiroInputTooLongMessage, true
 }
 
 // logKiroStreamInterrupted 记录 Kiro 流转换中途失败的真实原因。客户端只收到
@@ -143,17 +156,13 @@ func logKiroStreamInterrupted(ctx context.Context, account *Account, mappedModel
 	)
 }
 
-// writeKiroMessagesRequestError 写 Messages 协议的请求失败响应：请求体超限返回 400，其余保持 502。
-func writeKiroMessagesRequestError(c *gin.Context, err error) {
-	status, errType, message := http.StatusBadGateway, "api_error", "Upstream request failed"
-	if msg, ok := kiroPayloadTooLargeMessage(err); ok {
-		status, errType, message = http.StatusBadRequest, "invalid_request_error", msg
-	}
-	c.JSON(status, gin.H{
+// writeKiroMessagesRequestError 写 Messages 协议的请求失败响应（502）。
+func writeKiroMessagesRequestError(c *gin.Context) {
+	c.JSON(http.StatusBadGateway, gin.H{
 		"type": "error",
 		"error": gin.H{
-			"type":    errType,
-			"message": message,
+			"type":    "api_error",
+			"message": "Upstream request failed",
 		},
 	})
 }
@@ -224,7 +233,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				Kind:               "request_error",
 				Message:            safeErr,
 			})
-			writeKiroMessagesRequestError(c, err)
+			writeKiroMessagesRequestError(c)
 			return nil, fmt.Errorf("kiro upstream request failed: %s", safeErr)
 		}
 		defer func() { _ = resp.Body.Close() }()
@@ -336,7 +345,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			return nil, failoverErr
 		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		writeKiroMessagesRequestError(c, err)
+		writeKiroMessagesRequestError(c)
 		return nil, fmt.Errorf("kiro upstream request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -622,8 +631,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					return nil, requestCtx, readErr
 				}
 				classification := classifyKiroHTTPError(resp.StatusCode, string(respBody))
-				if classification.Category == kiroErrorMonthlyRequest {
-					s.markKiroMonthlyRequestCountRateLimited(ctx, account, string(respBody))
+				if kiroQuotaExhausted(classification) {
+					s.markKiroQuotaExhaustedRateLimited(ctx, account, classification.Category, string(respBody))
 				}
 				return nil, requestCtx, &UpstreamFailoverError{
 					StatusCode:      resp.StatusCode,
@@ -693,10 +702,9 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				classification := classifyKiroHTTPError(resp.StatusCode, string(respBody))
 				logKiroBadRequestClassification(classification, account, mappedModel, resp.Header, respBody)
 				if classification.Category == kiroErrorContentLength {
-					return nil, requestCtx, newKiroUpstreamPromptTooLongError(
-						estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), anthropicBody),
-						kiroStoredMaxInputTokens(account, requestModel, mappedModel, modelID),
-					)
+					if tooLong := kiroStoredLimitPromptTooLong(ctx, s, account, anthropicBody, requestModel, mappedModel, modelID); tooLong != nil {
+						return nil, requestCtx, tooLong
+					}
 				}
 				resetHTTPResponseBody(resp, respBody)
 				return resp, requestCtx, nil
@@ -771,10 +779,6 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArn(ctx context.Context, 
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
 	buildResult, err := buildKiroUpstreamPayload(account, anthropicBody, modelID, profileArn, headers, requestModel)
 	if err != nil {
-		var tooLarge *kiropkg.PayloadTooLargeError
-		if errors.As(err, &tooLarge) {
-			return nil, newKiroBytePromptTooLongError(tooLarge.LimitBytes)
-		}
 		return nil, err
 	}
 	if stableID := stableKiroConversationID(account, parsed, anthropicBody, modelID, profileArn); stableID != "" {
@@ -920,24 +924,42 @@ func (s *GatewayService) markKiroAuthTemporarilyUnavailable(ctx context.Context,
 	_ = s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason)
 }
 
-func (s *GatewayService) markKiroMonthlyRequestCountRateLimited(ctx context.Context, account *Account, body string) {
+// kiroQuotaExhausted 判断上游错误是否表示本计费周期额度已用尽：月度请求额度用尽，
+// 或超刷（overage）额度也用尽（402 OVERAGE_REQUEST_LIMIT_EXCEEDED）。与 kiro.rs 一致，
+// 两者都让账号停到月度重置。超刷只认 402：overage 关键词匹配不区分状态码，429 不能停到月底。
+func kiroQuotaExhausted(c kiroErrorClassification) bool {
+	switch c.Category {
+	case kiroErrorMonthlyRequest:
+		return true
+	case kiroErrorOverageExhausted:
+		return c.StatusCode == http.StatusPaymentRequired
+	default:
+		return false
+	}
+}
+
+// markKiroQuotaExhaustedRateLimited 把额度用尽的账号限流到下个月度重置。
+func (s *GatewayService) markKiroQuotaExhaustedRateLimited(ctx context.Context, account *Account, category, body string) {
 	if s == nil || s.accountRepo == nil || account == nil {
 		return
 	}
+	subject, reason := "kiro monthly request count", "kiro monthly request count exhausted (402): MONTHLY_REQUEST_COUNT"
+	if category == kiroErrorOverageExhausted {
+		subject, reason = "kiro overage limit", "kiro overage limit exhausted (402): OVERAGE_REQUEST_LIMIT_EXCEEDED"
+	}
 	resetAt := nextKiroMonthlyResetUTC(time.Now())
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
-		logger.L().Warn("kiro monthly request count rate-limit failed",
+		logger.L().Warn(subject+" rate-limit failed",
 			zap.Int64("account_id", account.ID),
 			zap.Time("reset_at", resetAt),
 			zap.Error(err),
 		)
 		return
 	}
-	reason := "kiro monthly request count exhausted (402): MONTHLY_REQUEST_COUNT"
 	if trimmed := strings.TrimSpace(body); trimmed != "" {
 		reason = fmt.Sprintf("%s body=%s", reason, truncateForLog([]byte(trimmed), 512))
 	}
-	logger.L().Warn("kiro monthly request count rate-limited",
+	logger.L().Warn(subject+" rate-limited",
 		zap.Int64("account_id", account.ID),
 		zap.Time("reset_at", resetAt),
 		zap.String("reason", reason),
@@ -1019,6 +1041,23 @@ func (s *GatewayService) markKiroInvalidModelRateLimited(ctx context.Context, ac
 	)
 }
 
+// kiroStoredLimitPromptTooLong 只在账号已同步的 maxInputTokens 被估算输入超过时返回精确上限错误。
+// 没有记录时返回 nil，调用方按上游原文走固定的上下文超限文案，不拿猜测值拒绝。
+func kiroStoredLimitPromptTooLong(ctx context.Context, s *GatewayService, account *Account, body []byte, models ...string) *kiroPromptTooLongError {
+	if s == nil {
+		return nil
+	}
+	maximum := kiroStoredMaxInputTokens(account, models...)
+	if maximum <= 0 {
+		return nil
+	}
+	tokens := estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), body)
+	if tokens <= 0 || int64(tokens) <= maximum {
+		return nil
+	}
+	return newKiroTokenPromptTooLongError(tokens, maximum)
+}
+
 func (s *GatewayService) rejectKiroPromptIfOverModelLimit(ctx context.Context, account *Account, body []byte, models ...string) error {
 	maximum := kiroStoredMaxInputTokens(account, models...)
 	if maximum <= 0 {
@@ -1073,15 +1112,13 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 		logKiroBadRequestClassification(classification, account, "", resp.Header, respBody)
 	}
 	if classification.Category == kiroErrorContentLength {
-		tooLong := newKiroUpstreamPromptTooLongError(
-			estimateKiroInputTokens(ctx, s.kiroMeteringAlgorithm(ctx), requestBody),
-			kiroStoredMaxInputTokens(account, mappedModel, gjson.GetBytes(requestBody, "model").String()),
-		)
-		_, _ = respondKiroAnthropicPromptTooLong(c, account, tooLong)
-		return tooLong
+		if tooLong := kiroStoredLimitPromptTooLong(ctx, s, account, requestBody, mappedModel, gjson.GetBytes(requestBody, "model").String()); tooLong != nil {
+			_, _ = respondKiroAnthropicPromptTooLong(c, account, tooLong)
+			return tooLong
+		}
 	}
-	if classification.Category == kiroErrorMonthlyRequest {
-		s.markKiroMonthlyRequestCountRateLimited(ctx, account, string(respBody))
+	if kiroQuotaExhausted(classification) {
+		s.markKiroQuotaExhaustedRateLimited(ctx, account, classification.Category, string(respBody))
 	}
 	if classification.Category == kiroErrorBadRequestInvalidModel && account != nil && account.Type == AccountTypeOAuth {
 		s.markKiroInvalidModelRateLimited(ctx, account, mappedModel)
@@ -1128,11 +1165,15 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 		Kind:               "http_error",
 		Message:            upstreamMsg,
 	})
+	message := coalesceKiroErrorMessage(resp.StatusCode, upstreamMsg)
+	if fixed, ok := kiroContextLengthClientMessage(resp.StatusCode, respBody); ok {
+		message = fixed
+	}
 	c.JSON(mapUpstreamStatusCode(resp.StatusCode), gin.H{
 		"type": "error",
 		"error": gin.H{
 			"type":    claudeErrorType(resp.StatusCode),
-			"message": coalesceKiroErrorMessage(resp.StatusCode, upstreamMsg),
+			"message": message,
 		},
 	})
 	return fmt.Errorf("kiro upstream error: %d %s", resp.StatusCode, upstreamMsg)

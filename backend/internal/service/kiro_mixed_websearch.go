@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
@@ -135,17 +136,16 @@ func (c *gatewayKiroRoundClient) complete(ctx context.Context, body []byte, stre
 	defer func() { _ = resp.Body.Close() }()
 	requestID := buildKiroRequestID(resp)
 	if stream {
-		chunks, result, streamErr := bufferKiroAnthropicStream(ctx, resp.Body, c.requestModel, c.inputTokens)
+		// 每轮解析都带上与 message_start 相同的缓存模拟用量和实际上游模型窗口。
+		// 最后一轮 message_delta 会覆盖 input_tokens；缓存字段缺失时网关会沿用
+		// message_start 的原始缓存数，再叠到 contextUsage 换算后的全量 input 上。
+		chunks, result, streamErr := bufferKiroAnthropicStream(ctx, resp.Body, c.requestModel, c.inputTokens, c.kiroRoundRequestContext(ctx, false))
 		if streamErr != nil {
 			return nil, streamErr
 		}
 		return &kiroModelRound{Chunks: chunks, Stream: result, RequestID: requestID}, nil
 	}
-	parsed, parseErr := kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, c.requestModel, kiropkg.KiroRequestContext{
-		CacheEmulationUsage:  c.cacheUsage.toKiroUsage(),
-		EstimatedInputTokens: c.inputTokens,
-		TokenizerAlgorithm:   c.svc.kiroMeteringAlgorithm(ctx),
-	})
+	parsed, parseErr := kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, c.requestModel, c.kiroRoundRequestContext(ctx, true))
 	if parseErr != nil {
 		return nil, parseErr
 	}
@@ -158,6 +158,25 @@ func (c *gatewayKiroRoundClient) complete(ctx context.Context, body []byte, stre
 		StopReason: gjson.GetBytes(parsed.ResponseBody, "stop_reason").String(),
 		RequestID:  requestID,
 	}, nil
+}
+
+func (c *gatewayKiroRoundClient) kiroRoundRequestContext(ctx context.Context, includeEstimate bool) kiropkg.KiroRequestContext {
+	if c == nil {
+		return kiropkg.KiroRequestContext{}
+	}
+	algorithm := anthropictokenizer.AlgorithmOfficial
+	if c.svc != nil {
+		algorithm = c.svc.kiroMeteringAlgorithm(ctx)
+	}
+	requestCtx := kiropkg.KiroRequestContext{
+		UpstreamModelID:     resolveKiroUpstreamModel(c.mappedModel),
+		CacheEmulationUsage: c.cacheUsage.toKiroUsage(),
+		TokenizerAlgorithm:  algorithm,
+	}
+	if includeEstimate {
+		requestCtx.EstimatedInputTokens = c.inputTokens
+	}
+	return requestCtx
 }
 
 func (c *gatewayKiroRoundClient) prefetch(ctx context.Context) {
