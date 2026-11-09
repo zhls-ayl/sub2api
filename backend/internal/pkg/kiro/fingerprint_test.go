@@ -19,12 +19,12 @@ func TestBuildUsageRuntimeUserAgentUsesCurrentAdmittedClient(t *testing.T) {
 
 	require.Contains(t, ua, "api/codewhispererstreaming#1.0.34")
 	require.Contains(t, ua, "aws-sdk-js/1.0.34")
-	require.Contains(t, ua, "KiroIDE-1.0.437-")
+	require.Contains(t, ua, "KiroIDE-1.4.121-")
 	require.Contains(t, ua, machineID)
 	require.Contains(t, amzUA, "aws-sdk-js/1.0.34")
-	require.Contains(t, amzUA, "KiroIDE-1.0.437-")
+	require.Contains(t, amzUA, "KiroIDE-1.4.121-")
 	require.NotContains(t, ua, "api/codewhispererruntime")
-	require.Contains(t, BuildRuntimeUserAgent(key, machineID), "KiroIDE-1.0.437-")
+	require.Contains(t, BuildRuntimeUserAgent(key, machineID), "KiroIDE-1.4.121-")
 }
 
 func TestBuildLoginHeadersStable(t *testing.T) {
@@ -47,7 +47,7 @@ func TestBuildLoginHeadersUsesProvidedMachineID(t *testing.T) {
 
 	require.Equal(t, headers1["User-Agent"], headers2["User-Agent"])
 	require.NotEqual(t, headers1["User-Agent"], headers3["User-Agent"])
-	require.Contains(t, headers1["User-Agent"], "KiroIDE-1.0.437")
+	require.Contains(t, headers1["User-Agent"], "KiroIDE-1.4.121")
 	require.Contains(t, headers1["User-Agent"], machineIDA)
 }
 
