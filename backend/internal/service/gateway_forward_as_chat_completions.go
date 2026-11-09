@@ -133,6 +133,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 				writeGatewayCCError(c, http.StatusBadRequest, "invalid_request_error", tooLong.Error())
 				return nil, tooLong
 			}
+			if failoverErr := kiroFailoverFromOpenErr(c, account, err); failoverErr != nil {
+				return nil, failoverErr
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			setOpsUpstreamError(c, 0, safeErr, "")
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

@@ -184,6 +184,9 @@ func (s *GatewayService) ForwardAsResponses(
 				writeResponsesError(c, http.StatusBadRequest, tooLong.responsesErrorCode(), tooLong.Error())
 				return nil, tooLong
 			}
+			if failoverErr := kiroFailoverFromOpenErr(c, account, err); failoverErr != nil {
+				return nil, failoverErr
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			setOpsUpstreamError(c, 0, safeErr, "")
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
