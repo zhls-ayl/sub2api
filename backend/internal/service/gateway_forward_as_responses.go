@@ -247,7 +247,12 @@ func (s *GatewayService) ForwardAsResponses(
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		// Apply account policies even for statuses outside the default failover list.
+		shouldDisable := false
+		if s.rateLimitService != nil {
+			shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+		}
+		if shouldDisable || s.shouldFailoverUpstreamError(resp.StatusCode) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				ProxyID:            opsUpstreamProxyID(account),
 				ProxyName:          opsUpstreamProxyName(account),
@@ -259,10 +264,6 @@ func (s *GatewayService) ForwardAsResponses(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			shouldDisable := false
-			if s.rateLimitService != nil {
-				shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
-			}
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
@@ -292,18 +293,39 @@ func (s *GatewayService) ForwardAsResponses(
 		// compact 请求必须缓冲：要拿到完整摘要文本才能合成 Codex 要求的单个
 		// compaction item，逐事件透传做不到。
 		result, handleErr = s.handleResponsesCompactionResponseWithRetry(resp, c, originalModel, mappedModel, reasoningEffort, startTime, clientStream, compactionRetry)
+		if exc := kiroUpstreamExceptionFromError(handleErr); exc != nil {
+			// 压缩处理只在客户端还没收到任何字节时把 Kiro 异常交回来：按 Kiro HTTP 错误处理，
+			// 不换号时以压缩失败的协议格式回写。
+			requestID := resp.Header.Get("x-request-id")
+			writeCompactionError := func(c *gin.Context, upstreamStatus int, message string) {
+				code := ""
+				if upstreamStatus == http.StatusBadRequest {
+					code = "invalid_request_error"
+				}
+				_ = s.failCompactionWithCode(c, clientStream, mapUpstreamStatusCode(upstreamStatus), code, message, requestID)
+			}
+			return nil, s.handleKiroUpstreamException(ctx, c, account, mappedModel, anthropicBody, exc, resp.Header, writeCompactionError)
+		}
 	} else if clientStream {
 		writerSizeBeforeStream := c.Writer.Size()
 		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, clientToolMapping)
 		var sseErr *sseStreamErrorEventError
 		switch {
 		case errors.As(handleErr, &sseErr):
-			return nil, s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream)
+			outputStarted := c.Writer.Size() != writerSizeBeforeStream
+			if kiroResult, handled, kiroErr := s.handleKiroStreamErrorEvent(ctx, c, account, resp, anthropicBody, originalModel, mappedModel, mappedModel, startTime, sseErr.RawData, outputStarted, writeKiroResponsesError); handled {
+				return kiroResult, kiroErr
+			}
+			return nil, s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, outputStarted)
 		case errors.Is(handleErr, errAnthropicNativeStreamIdle) && s.rateLimitService != nil:
 			s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 		}
 	} else {
 		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, clientToolMapping)
+		if exc := kiroUpstreamExceptionFromError(handleErr); exc != nil {
+			// 非流式客户端还没收到任何字节：与 /v1/messages 非流式一致，按 Kiro HTTP 错误处理。
+			return nil, s.handleKiroUpstreamException(ctx, c, account, mappedModel, anthropicBody, exc, resp.Header, writeKiroResponsesError)
+		}
 	}
 
 	return result, handleErr
@@ -521,6 +543,10 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 
 	if failure := streamStatus.failure(); failure != nil {
 		_ = resp.Body.Close()
+		if kiroUpstreamExceptionFromError(failure.err) != nil {
+			// Kiro 流内异常：不写响应、不计费，由调用方按 Kiro HTTP 错误处理（换号或回 4xx）。
+			return nil, failure.err
+		}
 		writeResponsesError(c, http.StatusBadGateway, "server_error", failure.message)
 		return &ForwardResult{
 			RequestID: requestID, UpstreamHeaders: resp.Header, Usage: usage,
