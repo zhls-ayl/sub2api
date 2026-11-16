@@ -3144,8 +3144,9 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 }
 
 // 逐条对齐 Kiro 官方模型卡片的「最大输出」一栏。DefaultModels 里每个模型都要有
-// 期望值，新增模型忘了归类会立刻失败。上游新增的 Kimi K3 与 Haiku 5.5 不在
-// 128000 档，保持默认 64000。
+// 期望值，新增模型忘了归类会立刻失败。上游新增的 Kimi K3、Haiku 5.5 与 Grok 4.7
+// 不在 128000 档，保持默认 64000。Grok 4.7 的官方上下文窗口是 500K，模型页没有
+// 单独抬高最大输出，因此输出上限仍走自维护版本的默认档。
 func TestKiroMaxOutputTokensMatchesOfficialLimits(t *testing.T) {
 	t.Parallel()
 
@@ -3153,6 +3154,7 @@ func TestKiroMaxOutputTokensMatchesOfficialLimits(t *testing.T) {
 		"gpt-5.6-sol":                         128000,
 		"gpt-5.6-terra":                       128000,
 		"gpt-5.6-luna":                        128000,
+		"grok-4.7":                            kiroDefaultMaxOutputTokens,
 		"kimi-k3":                             kiroDefaultMaxOutputTokens,
 		"claude-opus-4-8":                     128000,
 		"claude-opus-4-8-thinking":            128000,
@@ -3199,6 +3201,7 @@ func TestKiroMaxOutputTokensMatchesOfficialLimits(t *testing.T) {
 	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("claude-haiku-5-5"))
 	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("claude-haiku-5-5-thinking"))
 	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("kimi-k3"))
+	require.Equal(t, kiroDefaultMaxOutputTokens, kiroMaxOutputTokensForModel("grok-4.7"))
 }
 
 func TestKiroMaxOutputTokensForOpus5(t *testing.T) {
