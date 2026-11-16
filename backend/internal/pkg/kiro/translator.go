@@ -468,7 +468,7 @@ func IsKiroGPTModel(modelID string) bool {
 //
 // 上游曾把这里压成一律 64000。自维护版本保留原分档：账号已同步的
 // ListAvailableModels tokenLimits 仍优先，没有记录时才按模型名猜测。
-// Haiku（含上游新增的 Haiku 5.5）和 Kimi K3 不在 128000 档，保持 64000。
+// Haiku（含上游新增的 Haiku 5.5）、Kimi K3 和 Grok 4.7 不在 128000 档，保持 64000。
 func kiroMaxOutputTokensForModel(model string) int {
 	normalized := normalizeModelAlias(model)
 	if IsKiroGPTModel(normalized) || isKiro128KOutputClaude(normalized) {
