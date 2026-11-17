@@ -82,7 +82,7 @@ func (s *GatewayService) handleResponsesCompactionResponseWithRetry(
 	}
 
 	writerSizeBefore := c.Writer.Size()
-	finalResp, usage, stream := s.collectAnthropicResponseFromSSE(resp.Body, requestID, heartbeat)
+	finalResp, usage, stream := s.collectAnthropicResponseFromSSE(resp.Body, requestID, heartbeat, upstreamResponseModelObserverFromContext(c))
 	failure := stream.failure()
 	exc := failure.kiroException()
 	// Kiro 在流里报「输入太长」与 HTTP 400 同义，和上下文已满一样先截断工具输出重试一次。
@@ -106,7 +106,7 @@ func (s *GatewayService) handleResponsesCompactionResponseWithRetry(
 				}
 				return nil, s.failCompaction(c, clientStream, mapUpstreamStatusCode(retryResp.StatusCode), "Upstream request failed", requestID)
 			}
-			retryFinal, retryUsage, retryStream := s.collectAnthropicResponseFromSSE(retryResp.Body, requestID, heartbeat)
+			retryFinal, retryUsage, retryStream := s.collectAnthropicResponseFromSSE(retryResp.Body, requestID, heartbeat, upstreamResponseModelObserverFromContext(c))
 			usage = addClaudeUsage(usage, retryUsage)
 			finalResp = retryFinal
 			failure = retryStream.failure()
@@ -180,6 +180,7 @@ func (s *GatewayService) handleResponsesCompactionResponseWithRetry(
 		return nil, s.failCompaction(c, clientStream, http.StatusBadGateway,
 			"Failed to build compaction response", requestID)
 	}
+	respJSON = withResponsesUpstreamCredits(c, respJSON, "usage", usage.KiroCredits)
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -281,7 +282,11 @@ func writeCompactionIncomplete(c *gin.Context, clientStream bool, model string, 
 		},
 	}
 	if !clientStream {
-		c.JSON(http.StatusOK, response)
+		body, err := json.Marshal(response)
+		if err != nil {
+			return err
+		}
+		c.Data(http.StatusOK, "application/json; charset=utf-8", withResponsesUpstreamCredits(c, body, "usage", usage.KiroCredits))
 		return nil
 	}
 	payload, err := json.Marshal(map[string]any{
@@ -292,6 +297,7 @@ func writeCompactionIncomplete(c *gin.Context, clientStream bool, model string, 
 	if err != nil {
 		return err
 	}
+	payload = withResponsesUpstreamCredits(c, payload, "response.usage", usage.KiroCredits)
 	writeCompactionSSEHeaders(c)
 	_, _ = c.Writer.Write([]byte("event: response.incomplete\ndata: " + string(payload) + "\n\n"))
 	c.Writer.Flush()

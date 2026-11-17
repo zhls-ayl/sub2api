@@ -112,6 +112,7 @@ func provideCleanup(
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
+	usageBillingLanes *service.UsageBillingLaneCombiner,
 	balanceNotify *service.BalanceNotifyService,
 	digestSessions *service.DigestSessionStore,
 	subscriptionService *service.SubscriptionService,
@@ -129,6 +130,7 @@ func provideCleanup(
 	channelMonitorV2Aggregator *service.ChannelMonitorV2Aggregator,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
+	iqCheck *service.IQCheckService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	opencodeGoUsage *service.OpenCodeGoUsageService,
 	auditLog *service.AuditLogService,
@@ -339,6 +341,10 @@ func provideCleanup(
 				}
 				return nil
 			}},
+			{"UsageBillingLaneCombiner", func() error {
+				usageBillingLanes.Stop()
+				return nil
+			}},
 			{"OAuthService", func() error {
 				oauth.Stop()
 				return nil
@@ -412,6 +418,12 @@ func provideCleanup(
 			{"UpstreamBillingProbeService", func() error {
 				if upstreamBillingProbe != nil {
 					upstreamBillingProbe.Stop()
+				}
+				return nil
+			}},
+			{"IQCheckService", func() error {
+				if iqCheck != nil {
+					iqCheck.Stop()
 				}
 				return nil
 			}},

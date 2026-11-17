@@ -76,7 +76,6 @@ const ModelWhitelistSelectorStub = defineComponent({
   name: 'ModelWhitelistSelector',
   props: {
     modelMappings: { type: Array, default: () => [] },
-    availableModels: { type: Array, default: undefined },
     modelValue: {
       type: Array,
       default: () => []
@@ -444,6 +443,44 @@ describe('EditAccountModal', () => {
     expect(credentials?.region).toBe('eu-central-1')
   })
 
+  it.each(['apikey', 'oauth'])('can opt a passthrough %s account into model filtering without changing groups', async (type) => {
+    const account = buildAccount()
+    account.type = type
+    account.extra = { openai_passthrough: true }
+    account.group_ids = [17]
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(false)
+    await wrapper.get('[data-testid="edit-openai-passthrough-model-filter"]').setValue(true)
+    await wrapper.get('[data-testid="rewrite-to-snapshot"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.extra.openai_passthrough).toBe(true)
+    expect(payload.extra.openai_passthrough_model_filter).toBe(true)
+    expect(payload.credentials.model_mapping).toEqual({ 'gpt-5.2-2025-12-11': 'gpt-5.2-2025-12-11' })
+    expect(payload.group_ids).toEqual([17])
+    wrapper.unmount()
+  })
+
+  it('loads the saved model filter and removes it when passthrough is disabled', async () => {
+    const account = buildAccount()
+    account.extra = { openai_passthrough: true, openai_passthrough_model_filter: true }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get<HTMLInputElement>('[data-testid="edit-openai-passthrough-model-filter"]').element.checked).toBe(true)
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(true)
+    await wrapper.get('[data-testid="edit-openai-passthrough-toggle"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_passthrough_model_filter')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials.model_mapping).toEqual(account.credentials.model_mapping)
+    wrapper.unmount()
+  })
+
   it('passes existing non-identity mappings to the whitelist selector and preserves them on save', async () => {
     const account = buildAccount()
     account.credentials.model_mapping = { 'gpt-5.2': 'gpt-5.2', 'gpt-latest': 'deepseek-chat' }
@@ -548,30 +585,6 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.group_ids).toEqual([1])
     expect(account.group_ids).toEqual([1, 2])
-  })
-
-  it('shows the model restriction for Leonardo cookie accounts and saves the whitelist', async () => {
-    const account = {
-      ...buildGrokOAuthAccount(),
-      id: 9,
-      name: 'Leonardo Cookie',
-      platform: 'leonardo',
-      credentials: { model_mapping: { 'gpt-image-2': 'gpt-image-2' } }
-    } as any
-    updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
-
-    const wrapper = mountModal(account)
-
-    expect(wrapper.find('[data-testid="oauth-model-mapping-section"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="model-whitelist-value"]').text()).toBe('gpt-image-2')
-
-    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-
-    expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({
-      'gpt-image-2': 'gpt-image-2'
-    })
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
@@ -1431,6 +1444,14 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.upstream_billing_probe_enabled).toBe(true)
   })
 
+  it('puts the rate sync toggle on its own row, outside the rate grid cell', () => {
+    const wrapper = mountModal(buildAccount())
+    const row = wrapper.get('[data-testid="upstream-billing-rate-sync-row"]')
+    expect(row.find('[data-testid="upstream-billing-rate-sync"]').exists()).toBe(true)
+    expect(row.element.closest('.grid')).toBeNull()
+    expect(wrapper.get('[data-testid="account-rate-multiplier"]').element.closest('.grid')).not.toBeNull()
+  })
+
   it('enabling rate sync also enables probing and stops submitting a manual rate', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
@@ -1820,66 +1841,6 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.kiro_credit_unit_price_usd).toBe(0.08)
   })
 
-  it('hydrates and submits Leonardo cookie credit unit price in extra', async () => {
-    const account = {
-      ...buildGrokOAuthAccount(),
-      id: 10,
-      name: 'Leonardo Cookie',
-      platform: 'leonardo',
-      credentials: {},
-      extra: { leonardo_credit_unit_price_usd: 0.0014 }
-    } as any
-    updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
-
-    const wrapper = mountModal(account)
-    expect(wrapper.find('[data-testid="kiro-credit-unit-price-usd"]').exists()).toBe(false)
-    const input = wrapper.get<HTMLInputElement>('[data-testid="leonardo-credit-unit-price-usd"]')
-
-    expect(input.element.value).toBe('0.0014')
-
-    await input.setValue('0.0012')
-    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-
-    expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
-    expect(extra?.leonardo_credit_unit_price_usd).toBe(0.0012)
-    expect(extra).not.toHaveProperty('kiro_credit_unit_price_usd')
-  })
-
-  it('hydrates and submits Leonardo cookie image limits in extra', async () => {
-    const account = {
-      ...buildGrokOAuthAccount(),
-      id: 12,
-      name: 'Leonardo Cookie',
-      platform: 'leonardo',
-      credentials: {},
-      extra: { leonardo_max_quality: 'high', leonardo_max_short_edge: 1536, leonardo_max_upscale_factor: 1.5 }
-    } as any
-    updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
-
-    const wrapper = mountModal(account)
-    const quality = wrapper.get<HTMLSelectElement>('[data-testid="leonardo-max-quality"]')
-    const shortEdge = wrapper.get<HTMLInputElement>('[data-testid="leonardo-max-short-edge"]')
-    const factor = wrapper.get<HTMLInputElement>('[data-testid="leonardo-max-upscale-factor"]')
-    expect(quality.element.value).toBe('high')
-    expect(shortEdge.element.value).toBe('1536')
-    expect(factor.element.value).toBe('1.5')
-
-    await quality.setValue('medium')
-    await shortEdge.setValue('1024')
-    await factor.setValue('2')
-    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-
-    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
-    expect(extra).toMatchObject({
-      leonardo_max_quality: 'medium',
-      leonardo_max_short_edge: 1024,
-      leonardo_max_upscale_factor: 2
-    })
-  })
-
   it('hydrates and submits Fish native max quality', async () => {
     const account = {
       ...buildAccount(),
@@ -1916,20 +1877,6 @@ describe('EditAccountModal', () => {
 
     const wrapper = mountModal(account)
     expect(wrapper.find('[data-testid="fish-max-quality"]').exists()).toBe(false)
-  })
-
-  it('does not show the Leonardo credit unit price for relay accounts', () => {
-    const account = {
-      ...buildGrokAPIKeyAccount(),
-      id: 11,
-      name: 'Leonardo Relay',
-      platform: 'leonardo'
-    } as any
-
-    const wrapper = mountModal(account)
-
-    expect(wrapper.find('[data-testid="leonardo-credit-unit-price-usd"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="leonardo-image-limits"]').exists()).toBe(false)
   })
 
   it('allows saving apikey account when backend redacted api_key but credentials_status reports it exists', async () => {
@@ -2510,5 +2457,92 @@ describe('EditAccountModal temp-unschedulable rule scope', () => {
 
     expect(checkedScopes(wrapper)).toEqual(['temp-unsched-scope-model'])
     wrapper.unmount()
+  })
+})
+
+describe('EditAccountModal IQ check', () => {
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+  })
+
+  afterEach(() => vi.clearAllMocks())
+
+  it('turns the IQ check on in record-only mode with a model and a clamped interval', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.extra = { iq_check_state: { result: 'failed' } }
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="iq-check-model"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="iq-check-enabled"]').trigger('click')
+    expect((wrapper.get('[data-testid="iq-check-mode-record"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('[data-testid="iq-check-model"]').setValue(' gpt-5.5 ')
+    await wrapper.get('[data-testid="iq-check-interval"]').setValue('5')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(extra).toMatchObject({ iq_check_enabled: true, iq_check_model: 'gpt-5.5', iq_check_interval_minutes: 10 })
+    expect(extra).not.toHaveProperty('iq_check_auto_disable')
+    wrapper.unmount()
+  })
+
+  it('saves the auto-stop mode', async () => {
+    const account = buildAccount()
+    account.extra = { iq_check_enabled: true }
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="iq-check-mode-auto"]').setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({ iq_check_enabled: true, iq_check_auto_disable: true })
+    wrapper.unmount()
+  })
+
+  it('loads the saved settings and removes them when the check is turned off', async () => {
+    const account = buildAccount()
+    account.extra = { iq_check_enabled: true, iq_check_auto_disable: true, iq_check_model: 'gpt-5.5', iq_check_interval_minutes: 30 }
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect((wrapper.get('[data-testid="iq-check-mode-auto"]').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.get('[data-testid="iq-check-model"]').element as HTMLInputElement).value).toBe('gpt-5.5')
+    expect((wrapper.get('[data-testid="iq-check-interval"]').element as HTMLInputElement).value).toBe('30')
+    await wrapper.get('[data-testid="iq-check-enabled"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(extra).not.toHaveProperty('iq_check_enabled')
+    expect(extra).not.toHaveProperty('iq_check_auto_disable')
+    expect(extra).not.toHaveProperty('iq_check_model')
+    expect(extra).not.toHaveProperty('iq_check_interval_minutes')
+    wrapper.unmount()
+  })
+
+  it('warns that turning the check off does not restore an account it stopped', () => {
+    const account = buildAccount()
+    account.extra = { iq_check_state: { result: 'failed', disabled_by_check: true } }
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="iq-check-stopped-warning"]').exists()).toBe(true)
+    wrapper.unmount()
+
+    const healthy = mountModal(buildAccount())
+    expect(healthy.find('[data-testid="iq-check-stopped-warning"]').exists()).toBe(false)
+    healthy.unmount()
+  })
+
+  it('shows the IQ check only for OpenAI accounts', () => {
+    const openai = mountModal(buildAccount())
+    expect(openai.find('[data-testid="iq-check-section"]').exists()).toBe(true)
+    openai.unmount()
+
+    const anthropic = buildAccount()
+    anthropic.platform = 'anthropic'
+    const other = mountModal(anthropic)
+    expect(other.find('[data-testid="iq-check-section"]').exists()).toBe(false)
+    other.unmount()
   })
 })

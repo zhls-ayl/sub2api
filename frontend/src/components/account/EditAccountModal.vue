@@ -1037,9 +1037,9 @@
         </div>
       </div>
 
-      <!-- OpenAI / Kiro / Grok / Leonardo OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立区域) -->
+      <!-- OpenAI / Kiro / Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立区域) -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'kiro' || account.platform === 'grok' || account.platform === 'leonardo') && account.type === 'oauth'"
+        v-if="(account.platform === 'openai' || account.platform === 'kiro' || account.platform === 'grok') && account.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
         :data-testid="account.platform === 'grok' ? 'grok-model-settings' : 'oauth-model-mapping-section'"
       >
@@ -1244,7 +1244,6 @@
                 v-for="preset in presetMappings"
                 :key="'oauth-' + preset.label"
                 type="button"
-                data-testid="oauth-preset-mapping"
                 @click="addPresetMapping(preset.from, preset.to)"
                 :class="['rounded-lg px-3 py-1 text-xs transition-colors', preset.color]"
               >
@@ -1267,57 +1266,6 @@
           data-testid="kiro-credit-unit-price-usd"
         />
         <p class="input-hint">{{ t('admin.accounts.kiroCreditUnitPriceUsdHint') }}</p>
-      </div>
-
-      <!-- Leonardo Cookie 账号的每积分单价：仅用于今日统计估算积分消耗金额，不参与计费 -->
-      <div v-if="isLeonardoCookieAccount" class="border-t border-gray-200 pt-4 dark:border-dark-600">
-        <label class="input-label">{{ t('admin.accounts.leonardoCreditUnitPriceUsd') }}</label>
-        <input
-          v-model.number="leonardoCreditUnitPriceUsd"
-          type="number"
-          min="0"
-          step="0.0001"
-          class="input"
-          placeholder="0"
-          data-testid="leonardo-credit-unit-price-usd"
-        />
-        <p class="input-hint">{{ t('admin.accounts.leonardoCreditUnitPriceUsdHint') }}</p>
-      </div>
-
-      <!-- Leonardo Cookie 账号的出图上限：超过时按上限出图，再超分回请求尺寸，按交付尺寸计费 -->
-      <div v-if="isLeonardoCookieAccount" class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600" data-testid="leonardo-image-limits">
-        <div>
-          <label class="input-label">{{ t('admin.accounts.leonardoMaxQuality') }}</label>
-          <Select v-model="leonardoImageLimits.maxQuality" :options="leonardoMaxQualityOptions" data-testid="leonardo-max-quality" />
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="input-label">{{ t('admin.accounts.leonardoMaxShortEdge') }}</label>
-            <input
-              v-model.number="leonardoImageLimits.maxShortEdge"
-              type="number"
-              min="0"
-              step="16"
-              class="input"
-              placeholder="0"
-              data-testid="leonardo-max-short-edge"
-            />
-          </div>
-          <div>
-            <label class="input-label">{{ t('admin.accounts.leonardoMaxUpscaleFactor') }}</label>
-            <input
-              v-model.number="leonardoImageLimits.maxUpscaleFactor"
-              type="number"
-              min="1"
-              max="4"
-              step="0.1"
-              class="input"
-              placeholder="2"
-              data-testid="leonardo-max-upscale-factor"
-            />
-          </div>
-        </div>
-        <p class="input-hint">{{ t('admin.accounts.leonardoImageLimitsHint') }}</p>
       </div>
 
       <!-- Upstream fields (only for upstream type) -->
@@ -2204,26 +2152,26 @@
               )
             }}
           </p>
-          <div
-            v-if="account?.type === 'apikey'"
-            class="mt-3 flex items-center justify-between gap-3"
-          >
-            <div class="min-w-0">
-              <p class="text-xs font-medium text-gray-700 dark:text-gray-200">
-                {{ t('admin.accounts.upstreamBilling.syncRate') }}
-              </p>
-              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.accounts.upstreamBilling.syncRateHint') }}
-              </p>
-            </div>
-            <Toggle
-              :model-value="upstreamBillingRateSyncEnabled"
-              data-testid="upstream-billing-rate-sync"
-              :aria-label="t('admin.accounts.upstreamBilling.syncRate')"
-              @update:model-value="handleUpstreamBillingRateSyncChange"
-            />
-          </div>
         </div>
+      </div>
+      <!-- Full-width row: the hint is too long for a quarter-width grid cell. -->
+      <div
+        v-if="account?.type === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="upstream-billing-rate-sync-row"
+      >
+        <div class="min-w-0">
+          <label class="input-label mb-0">{{ t('admin.accounts.upstreamBilling.syncRate') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.upstreamBilling.syncRateHint') }}
+          </p>
+        </div>
+        <Toggle
+          :model-value="upstreamBillingRateSyncEnabled"
+          data-testid="upstream-billing-rate-sync"
+          :aria-label="t('admin.accounts.upstreamBilling.syncRate')"
+          @update:model-value="handleUpstreamBillingRateSyncChange"
+        />
       </div>
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.expiresAt') }}</label>
@@ -2256,6 +2204,7 @@
           </div>
           <button
             type="button"
+            data-testid="edit-openai-passthrough-toggle"
             @click="openaiPassthroughEnabled = !openaiPassthroughEnabled"
             :class="[
               'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
@@ -2270,6 +2219,20 @@
             />
           </button>
         </div>
+        <label v-if="openaiPassthroughEnabled" class="mt-3 flex items-start gap-2">
+          <input
+            v-model="openaiPassthroughModelFilterEnabled"
+            type="checkbox"
+            data-testid="edit-openai-passthrough-model-filter"
+            class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <span class="text-sm">
+            {{ t('admin.accounts.openai.passthroughModelFilter') }}
+            <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.passthroughModelFilterDesc') }}
+            </span>
+          </span>
+        </label>
       </div>
 
       <!-- OpenAI Codex namespace 工具摊平（兼容开关，仅 OAuth） -->
@@ -2906,6 +2869,48 @@
           </div>
           <div class="w-44 flex-shrink-0">
             <Select v-model="editPlanType" :options="planTypeOptions" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 降智检测：后端定时出题核对答案，自动模式下最近两轮错 3 题停调度（iq_check_service.go） -->
+      <div
+        v-if="account?.platform === 'openai'"
+        class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="iq-check-section"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.iqCheck.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.iqCheck.hint') }}</p>
+          </div>
+          <Toggle v-model="iqCheckEnabled" data-testid="iq-check-enabled" />
+        </div>
+        <p
+          v-if="iqCheckStoppedScheduling"
+          class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+          data-testid="iq-check-stopped-warning"
+        >
+          {{ t('admin.accounts.iqCheck.stoppedWarning') }}
+        </p>
+        <div v-if="iqCheckEnabled" class="flex flex-wrap gap-4 text-sm" role="radiogroup" :aria-label="t('admin.accounts.iqCheck.title')">
+          <label class="flex items-center gap-2">
+            <input v-model="iqCheckAutoDisable" type="radio" :value="false" data-testid="iq-check-mode-record" />
+            {{ t('admin.accounts.iqCheck.modes.record') }}
+          </label>
+          <label class="flex items-center gap-2">
+            <input v-model="iqCheckAutoDisable" type="radio" :value="true" data-testid="iq-check-mode-auto" />
+            {{ t('admin.accounts.iqCheck.modes.auto') }}
+          </label>
+        </div>
+        <div v-if="iqCheckEnabled" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label class="input-label" for="iq-check-model">{{ t('admin.accounts.iqCheck.model') }}</label>
+            <input id="iq-check-model" v-model.trim="iqCheckModel" type="text" class="input" :placeholder="t('admin.accounts.iqCheck.modelPlaceholder')" data-testid="iq-check-model" />
+          </div>
+          <div>
+            <label class="input-label" for="iq-check-interval">{{ t('admin.accounts.iqCheck.interval') }}</label>
+            <input id="iq-check-interval" v-model.number="iqCheckInterval" type="number" :min="IQ_CHECK_MIN_INTERVAL" :max="IQ_CHECK_MAX_INTERVAL" step="1" class="input" data-testid="iq-check-interval" />
           </div>
         </div>
       </div>
@@ -3667,13 +3672,6 @@ import type {
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
-import {
-  LEONARDO_MAX_QUALITY_VALUES,
-  applyLeonardoImageLimitsToExtra,
-  defaultLeonardoImageLimits,
-  leonardoImageLimitsFromExtra,
-  type LeonardoImageLimitsForm
-} from '@/utils/leonardoImageLimits'
 import { FISH_MAX_QUALITY_VALUES, applyFishMaxQualityToExtra, fishMaxQualityFromExtra } from '@/utils/fishImageLimits'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
@@ -3919,8 +3917,6 @@ const isKiroRelay = computed(() => isKiroRelayAccount(props.account))
 // Kiro 直连 API Key 账号(apikey + 无 base_url):仅这类账号的推理区域由 api_region 控制。
 // OAuth/IdC 账号的 region 是 Identity Center 区域,不参与推理路由,故不展示本字段。
 const isKiroDirectApiKey = computed(() => isKiroDirectApiKeyAccount(props.account))
-// Leonardo Cookie 账号(oauth)消耗 Leonardo 积分;中转账号(apikey)不消耗,故只对前者展示积分单价。
-const isLeonardoCookieAccount = computed(() => props.account?.platform === 'leonardo' && props.account?.type === 'oauth')
 // Fish：凭据里有 base_url = 中转号；没有 base_url = 原生号（密钥在 api_key）。
 const isFishRelayEdit = computed(() => {
   const credentials = (props.account?.credentials as Record<string, unknown>) || {}
@@ -3954,12 +3950,6 @@ const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
 const editKiroAPIRegion = ref('us-east-1')
 const kiroCreditUnitPriceUsd = ref(0)
-const leonardoCreditUnitPriceUsd = ref(0)
-const leonardoImageLimits = ref<LeonardoImageLimitsForm>(defaultLeonardoImageLimits())
-const leonardoMaxQualityOptions = computed(() => [
-  { value: '', label: t('admin.accounts.leonardoMaxQualityUnlimited') },
-  ...LEONARDO_MAX_QUALITY_VALUES.map((value) => ({ value, label: value }))
-])
 const fishMaxQuality = ref('')
 const fishMaxQualityOptions = computed(() => [
   { value: '', label: t('admin.accounts.fishMaxQualityUnlimited') },
@@ -4503,6 +4493,7 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+const openaiPassthroughModelFilterEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -4518,6 +4509,22 @@ const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_comple
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
+// 降智检测配置（extra: iq_check_enabled / iq_check_auto_disable / iq_check_model / iq_check_interval_minutes）。
+// 间隔范围与后端 iq_check_service.go 的取值范围一致。
+const IQ_CHECK_DEFAULT_INTERVAL = 60
+const IQ_CHECK_MIN_INTERVAL = 10
+const IQ_CHECK_MAX_INTERVAL = 1440
+const iqCheckEnabled = ref(false)
+// false = 只记录（默认），true = 自动停调度
+const iqCheckAutoDisable = ref(false)
+const iqCheckModel = ref('')
+// 检测停掉的调度只有检测自己或手动切换能恢复；关闭检测不会恢复。
+const iqCheckStoppedScheduling = computed(() => props.account?.extra?.iq_check_state?.disabled_by_check === true)
+const iqCheckInterval = ref<number | ''>(IQ_CHECK_DEFAULT_INTERVAL)
+const normalizeIQCheckInterval = (value: number | ''): number => {
+  const minutes = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : IQ_CHECK_DEFAULT_INTERVAL
+  return Math.min(Math.max(minutes, IQ_CHECK_MIN_INTERVAL), IQ_CHECK_MAX_INTERVAL)
+}
 const codexCLIOnlyAppServerEnabled = ref(false)
 const codexTelemetryEnabled = ref(false)
 type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
@@ -4746,7 +4753,7 @@ const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
   return 'auto'
 }
 const isOpenAIModelRestrictionDisabled = computed(() =>
-  props.account?.platform === 'openai' && openaiPassthroughEnabled.value
+  props.account?.platform === 'openai' && openaiPassthroughEnabled.value && !openaiPassthroughModelFilterEnabled.value
 )
 const openAIResponsesStatusKey = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
@@ -4925,7 +4932,7 @@ const buildModelRestrictionMapping = () =>
   buildModelMappingObject('combined', allowedModels.value, modelMappings.value, kiroRestrictionOptions())
 
 const applyOpenAIModelMappingCredentials = (credentials: Record<string, unknown>) => {
-  const shouldApplyModelMapping = !openaiPassthroughEnabled.value
+  const shouldApplyModelMapping = !isOpenAIModelRestrictionDisabled.value
 
   if (shouldApplyModelMapping) {
     const modelMapping = buildModelRestrictionMapping()
@@ -5003,13 +5010,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     : typeof kiroCreditUnitPrice === 'string'
       ? Number(kiroCreditUnitPrice) || 0
       : 0
-  const leonardoCreditUnitPrice = extra?.leonardo_credit_unit_price_usd
-  leonardoCreditUnitPriceUsd.value = typeof leonardoCreditUnitPrice === 'number'
-    ? leonardoCreditUnitPrice
-    : typeof leonardoCreditUnitPrice === 'string'
-      ? Number(leonardoCreditUnitPrice) || 0
-      : 0
-  leonardoImageLimits.value = leonardoImageLimitsFromExtra(extra as Record<string, unknown> | undefined)
   fishMaxQuality.value = fishMaxQualityFromExtra(extra as Record<string, unknown> | undefined)
   autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
   autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
@@ -5026,6 +5026,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
+  openaiPassthroughModelFilterEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
   editPlanType.value = ''
@@ -5037,6 +5038,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
+  iqCheckEnabled.value = false
+  iqCheckAutoDisable.value = false
+  iqCheckModel.value = ''
+  iqCheckInterval.value = IQ_CHECK_DEFAULT_INTERVAL
   codexTelemetryEnabled.value = false
   codexFingerprintMode.value = 'off'
   codexImageToolMode.value = 'inherit'
@@ -5045,6 +5050,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
+    openaiPassthroughModelFilterEnabled.value = extra?.openai_passthrough_model_filter === true
     openaiFlattenNamespacesEnabled.value =
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
     const longContextBillingValue = extra?.openai_long_context_billing_enabled
@@ -5054,6 +5060,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       ? readPlanType(newAccount.credentials as Record<string, unknown> | undefined)
       : ''
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
+    const iqModel = extra?.iq_check_model
+    const iqInterval = extra?.iq_check_interval_minutes
+    iqCheckEnabled.value = extra?.iq_check_enabled === true
+    iqCheckAutoDisable.value = extra?.iq_check_auto_disable === true
+    iqCheckModel.value = typeof iqModel === 'string' ? iqModel : ''
+    iqCheckInterval.value = typeof iqInterval === 'number' ? iqInterval : IQ_CHECK_DEFAULT_INTERVAL
     if (newAccount.type === 'apikey') {
       openAIResponsesMode.value = normalizeOpenAIResponsesMode(extra?.openai_responses_mode)
       openAIEndpointCapabilities.value = readOpenAIEndpointCapabilities(
@@ -5403,7 +5415,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       loadModelRestrictionFromMapping(oauthCredentials.model_mapping as Record<string, unknown> | undefined, {
         kiroDirect: true
       })
-    } else if ((newAccount.platform === 'openai' || newAccount.platform === 'grok' || newAccount.platform === 'leonardo') && newAccount.credentials) {
+    } else if ((newAccount.platform === 'openai' || newAccount.platform === 'grok') && newAccount.credentials) {
       const oauthCredentials = newAccount.credentials as Record<string, unknown>
       loadModelRestrictionFromMapping(oauthCredentials.model_mapping as Record<string, unknown> | undefined)
     } else {
@@ -6111,7 +6123,7 @@ const handleSubmit = async () => {
       const newBaseUrl = props.account.platform === 'kiro'
         ? editBaseUrl.value.trim()
         : (editBaseUrl.value.trim() || defaultBaseUrl.value)
-      const shouldApplyModelMapping = !(props.account.platform === 'openai' && openaiPassthroughEnabled.value)
+      const shouldApplyModelMapping = !isOpenAIModelRestrictionDisabled.value
 
       if (!newBaseUrl && props.account.platform !== 'kiro') {
         appStore.showError(t('admin.accounts.upstream.pleaseEnterBaseUrl'))
@@ -6416,23 +6428,6 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
     }
 
-    // Leonardo OAuth: persist model restriction to credentials
-    // 白名单与映射行都空 => 删掉 model_mapping，回落到后端默认映射。
-    if (props.account.platform === 'leonardo' && props.account.type === 'oauth') {
-      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-        ((props.account.credentials as Record<string, unknown>) || {})
-      const newCredentials: Record<string, unknown> = { ...currentCredentials }
-
-      const modelMapping = buildModelRestrictionMapping()
-      if (modelMapping) {
-        newCredentials.model_mapping = modelMapping
-      } else {
-        delete newCredentials.model_mapping
-      }
-
-      updatePayload.credentials = newCredentials
-    }
-
     // OpenAI/Grok OAuth: persist model mapping to credentials
     if ((props.account.platform === 'openai' || props.account.platform === 'grok') && props.account.type === 'oauth') {
       const currentCredentials = isSparkShadow.value
@@ -6478,16 +6473,6 @@ const handleSubmit = async () => {
       const unitPrice = Number(kiroCreditUnitPriceUsd.value ?? 0)
       newExtra.kiro_credit_unit_price_usd = Number.isFinite(unitPrice) ? unitPrice : 0
       updatePayload.extra = newExtra
-    }
-
-    // 仅 Leonardo Cookie 账号持久化积分单价;中转账号(apikey)转发到外部上游,不消耗 Leonardo 积分。
-    if (isLeonardoCookieAccount.value) {
-      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
-        (props.account.extra as Record<string, unknown>) || {}
-      const newExtra: Record<string, unknown> = { ...currentExtra }
-      const unitPrice = Number(leonardoCreditUnitPriceUsd.value ?? 0)
-      newExtra.leonardo_credit_unit_price_usd = Number.isFinite(unitPrice) ? unitPrice : 0
-      updatePayload.extra = applyLeonardoImageLimitsToExtra(newExtra, leonardoImageLimits.value)
     }
 
     // Fish 原生号的最大质量。中转号原样转发，不写这个上限。
@@ -6726,6 +6711,11 @@ const handleSubmit = async () => {
         delete newExtra.openai_passthrough
         delete newExtra.openai_oauth_passthrough
       }
+      if (openaiPassthroughEnabled.value && openaiPassthroughModelFilterEnabled.value) {
+        newExtra.openai_passthrough_model_filter = true
+      } else {
+        delete newExtra.openai_passthrough_model_filter
+      }
       // 缺省即保留 namespace，不写空值，避免 extra 里堆积默认项
       if (props.account.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {
         newExtra.openai_responses_flatten_namespaces = true
@@ -6759,6 +6749,7 @@ const handleSubmit = async () => {
           newExtra.web_search_emulation = webSearchEmulationMode.value
         }
 		}
+		applyOpenAIImageSizeTiersToExtra(newExtra, openAIImageSizeTiers.value)
 		if (autoPause5hThreshold.value != null && autoPause5hThreshold.value > 0) {
 			newExtra.auto_pause_5h_threshold = autoPause5hThreshold.value / 100
 		} else {
@@ -6779,7 +6770,6 @@ const handleSubmit = async () => {
 		} else {
 			delete newExtra.auto_pause_7d_disabled
 		}
-		applyOpenAIImageSizeTiersToExtra(newExtra, openAIImageSizeTiers.value)
 		if (props.account.type === 'oauth' && !isSparkShadow.value) {
 			newExtra.auto_reset_credit_enabled = autoResetCreditEnabled.value
 			newExtra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100
@@ -6839,6 +6829,20 @@ const handleSubmit = async () => {
             delete newExtra.codex_telemetry_enabled
           }
         }
+      }
+
+      if (iqCheckEnabled.value) {
+        newExtra.iq_check_enabled = true
+        if (iqCheckAutoDisable.value) newExtra.iq_check_auto_disable = true
+        else delete newExtra.iq_check_auto_disable
+        if (iqCheckModel.value.trim()) newExtra.iq_check_model = iqCheckModel.value.trim()
+        else delete newExtra.iq_check_model
+        newExtra.iq_check_interval_minutes = normalizeIQCheckInterval(iqCheckInterval.value)
+      } else {
+        delete newExtra.iq_check_enabled
+        delete newExtra.iq_check_auto_disable
+        delete newExtra.iq_check_model
+        delete newExtra.iq_check_interval_minutes
       }
 
       updatePayload.extra = newExtra

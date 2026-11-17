@@ -245,9 +245,6 @@ gateway:
   # Share Kiro cache emulation prefix state via Redis across instances (default false)
   # Kiro 缓存模拟的前缀命中状态通过 Redis 跨实例共享；关闭时各实例独立模拟
   kiro_cache_emulation_redis_enabled: false
-  # Share Excel BPS replay/catalog state via Redis across instances (default false)
-  # Excel BPS 的回放与模型目录状态通过 Redis 跨实例共享；关闭时各实例独立维护
-  excel_bps_state_redis_enabled: false
   # Timeout for waiting upstream response headers (seconds)
   # 等待上游响应头超时时间（秒）
   response_header_timeout: 600
@@ -566,9 +563,6 @@ gateway:
   # Stream data interval timeout (seconds), 0=disable
   # 流数据间隔超时（秒），0=禁用
   stream_data_interval_timeout: 180
-  # Excel BPS stream data interval timeout (seconds), 0=disable, otherwise 30-300 (default 120)
-  # Excel BPS 流数据间隔超时（秒），0=禁用，否则取 30-300（默认 120）
-  excel_bps_stream_data_interval_timeout: 120
   # Stream keepalive interval (seconds), 0=disable
   # 流式 keepalive 间隔（秒），0=禁用
   stream_keepalive_interval: 10
@@ -584,11 +578,6 @@ gateway:
   # Non-streaming Images JSON keepalive interval (seconds), 0=disable; commits HTTP 200 after the first heartbeat
   # 图片非流式 JSON keepalive 间隔（秒），0=禁用；首个心跳后 HTTP 状态会固化为 200
   image_nonstream_keepalive_interval: 0
-  # Leonardo native accounts report no token usage; usage is estimated as credits spent x this ratio
-  # (output tokens per credit), 0=omit usage. 34 is derived from gpt-image-1's published token table.
-  # Leonardo 原生号不报 token 用量，按扣除积分 × 该比例估算 usage（每积分多少输出 token），0=不返回 usage；
-  # 34 由 gpt-image-1 官方 token 表推出，可用 OpenAI 渠道的真实 usage 校准
-  leonardo_usage_tokens_per_credit: 34
   # Image generation independent concurrency limiter (process-local, default disabled)
   # 图片生成独立并发限制（进程级，默认关闭；多实例总上限约为实例数×该值）
   image_concurrency:
@@ -933,8 +922,8 @@ idempotency:
 # 并发等待配置
 # =============================================================================
 concurrency:
-  # SSE ping interval during concurrency wait (seconds)
-  # 并发等待期间的 SSE ping 间隔（秒）
+  # SSE ping interval during concurrency wait (seconds); 0 disables pings to avoid committing HTTP status early
+  # 并发等待期间的 SSE ping 间隔（秒）；0 禁用 ping，避免提前写入 HTTP 状态码
   ping_interval: 10
 
 # =============================================================================
@@ -1206,6 +1195,11 @@ pricing:
   # Gemini 显式缓存存储单价（每 token 每小时，USD）优先取这里的 cache_storage_cost_per_token_per_hour 字段，
   # 未配置时使用内置官方价（先按已发布型号，再按 Pro / Flash 系列兜底）；两者都没有的模型拒绝创建缓存。
   # 目录中不存在的模型条目还须同时提供 input_cost_per_token / output_cost_per_token。
+  # Explicit nonnegative DeepSeek input/output/cache-read token prices here,
+  # including zero, are final rates and do not receive the official peak multiplier.
+  # Omitted or null fields still use the official defaults and peak/off-peak rules.
+  # DeepSeek 的输入/输出/缓存读单价若在此显式设为非负值（含 0），按该价计费，
+  # 不叠加官方高峰倍率；省略或 null 的字段仍按官方默认价与峰谷规则计费。
   # override_file: "./data/model_pricing_overrides.json"
   # Update interval in hours
   # 更新间隔（小时）
