@@ -165,37 +165,63 @@ func TestHandleStreamingResponse_CacheTokens(t *testing.T) {
 	require.Equal(t, 30, result.usage.CacheReadInputTokens)
 }
 
+// 内部积分字段默认删除；带 X-Sub2API-Upstream-Credits 时改名为 usage.upstream_credits 输出。
+// 两种情况下记账都读内部字段。
 func TestHandleStreamingResponse_KiroCreditsInternalField(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	svc := newMinimalGatewayService()
+	for _, tc := range []struct {
+		name          string
+		header        string
+		credits       string
+		wantAccounted float64
+		wantCredits   bool
+	}{
+		{name: "header absent strips credits", credits: "0.17", wantAccounted: 0.17},
+		{name: "header off strips credits", header: "0", credits: "0.17", wantAccounted: 0.17},
+		{name: "header on exposes credits", header: "1", credits: "0.17", wantAccounted: 0.17, wantCredits: true},
+		{name: "header true is case insensitive", header: " TRUE ", credits: "0.17", wantAccounted: 0.17, wantCredits: true},
+		{name: "header on with zero credits strips field", header: "1", credits: "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			svc := newMinimalGatewayService()
 
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			if tc.header != "" {
+				c.Request.Header.Set(upstreamCreditsRequestHeader, tc.header)
+			}
 
-	pr, pw := io.Pipe()
-	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: pr}
+			pr, pw := io.Pipe()
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: pr}
 
-	go func() {
-		defer func() { _ = pw.Close() }()
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":3}}}\n\n"))
-		_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":15,\"_sub2api_kiro_credits\":0.17}}\n\n"))
-		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
-	}()
+			go func() {
+				defer func() { _ = pw.Close() }()
+				_, _ = pw.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":3}}}\n\n"))
+				_, _ = pw.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":15,\"_sub2api_kiro_credits\":" + tc.credits + "}}\n\n"))
+				_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+			}()
 
-	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
-	_ = pr.Close()
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.NotNil(t, result.usage)
-	require.Equal(t, 10, result.usage.InputTokens)
-	require.Equal(t, 15, result.usage.OutputTokens)
-	require.Equal(t, 3, result.usage.CacheReadInputTokens)
-	require.InDelta(t, 0.17, result.usage.KiroCredits, 0.000001)
+			result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+			_ = pr.Close()
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, result.usage)
+			require.Equal(t, 10, result.usage.InputTokens)
+			require.Equal(t, 15, result.usage.OutputTokens)
+			require.Equal(t, 3, result.usage.CacheReadInputTokens)
+			require.InDelta(t, tc.wantAccounted, result.usage.KiroCredits, 0.000001)
 
-	body := rec.Body.String()
-	require.Contains(t, body, `"output_tokens":15`)
-	require.NotContains(t, body, "_sub2api_kiro_credits")
+			body := rec.Body.String()
+			require.Contains(t, body, `"output_tokens":15`)
+			require.NotContains(t, body, "_sub2api_kiro_credits")
+			if tc.wantCredits {
+				require.Contains(t, body, `"upstream_credits":0.17`)
+			} else {
+				require.NotContains(t, body, "upstream_credits")
+			}
+		})
+	}
 }
 
 func TestHandleStreamingResponse_EmptyStream(t *testing.T) {
@@ -564,4 +590,105 @@ func TestHandleStreamingResponse_SSEErrorEvent_NonJSONDataLine(t *testing.T) {
 		_ = ExtractUpstreamErrorMessage([]byte(sseErr.RawData))
 	})
 	require.Equal(t, "", ExtractUpstreamErrorMessage([]byte(sseErr.RawData)))
+}
+
+func TestSSEEventNeedsJSONParse(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		eventName    string
+		data         string
+		keepalive    bool
+		modelReplace bool
+		want         bool
+	}{
+		{
+			name:      "content_block_delta is forwarded verbatim",
+			eventName: "content_block_delta",
+			data:      `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+			want:      false,
+		},
+		{
+			name:      "ping is forwarded verbatim",
+			eventName: "ping",
+			data:      `{"type":"ping"}`,
+			want:      false,
+		},
+		{
+			name:      "message_start needs usage parsing",
+			eventName: "message_start",
+			data:      `{"type":"message_start","message":{"usage":{"input_tokens":1}}}`,
+			want:      true,
+		},
+		{
+			name:      "message_delta needs usage parsing",
+			eventName: "message_delta",
+			data:      `{"type":"message_delta","usage":{"output_tokens":1}}`,
+			want:      true,
+		},
+		{
+			name:      "missing event name falls back to parsing",
+			eventName: "",
+			data:      `{"type":"content_block_delta"}`,
+			want:      true,
+		},
+		{
+			name:      "keepalive needs block fields",
+			eventName: "content_block_delta",
+			data:      `{"type":"content_block_delta","index":0}`,
+			keepalive: true,
+			want:      true,
+		},
+		{
+			name:         "model replace needs message parsing",
+			eventName:    "content_block_start",
+			data:         `{"type":"content_block_start","message":{"model":"x"}}`,
+			modelReplace: true,
+			want:         true,
+		},
+		{
+			name:      "unknown event with usage must be parsed",
+			eventName: "custom_event",
+			data:      `{"usage":{"input_tokens":1}}`,
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, sseEventNeedsJSONParse(tt.eventName, []byte(tt.data), tt.keepalive, tt.modelReplace))
+		})
+	}
+}
+
+// 快路径必须原样转发 content_block_delta，不能重新序列化改变 key 顺序/空格/转义；
+// message_stop 在没有 keepalive 的情况下也要能被识别为终态。
+func TestHandleStreamingResponse_FastPathForwardsDeltaBytesVerbatim(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: pr}
+
+	delta := `{"delta":{"text":"你好","type":"text_delta"},"type":"content_block_delta","index":0,"extra":"a  b"}`
+	go func() {
+		defer func() { _ = pw.Close() }()
+		_, _ = pw.Write([]byte("event: content_block_delta\ndata: " + delta + "\n\n"))
+		_, _ = pw.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+	}()
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	_ = pr.Close()
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	body := rec.Body.String()
+	require.Contains(t, body, "event: content_block_delta\ndata: "+delta+"\n\n",
+		"网关必须逐字节转发不需要改写的 delta")
+	require.Contains(t, body, "event: message_stop")
 }

@@ -690,6 +690,11 @@ func (a *Account) PrepareSharedSnapshot() {
 	a.modelMappingCacheShared = true
 }
 
+// SharedSnapshotCurrent 报告账号是否为 PrepareSharedSnapshot 处理过的母本，且其预解析结果对应当前的运行时模型映射版本。
+func (a *Account) SharedSnapshotCurrent() bool {
+	return a != nil && a.modelMappingCacheShared && a.modelMappingCacheRuntimeVersion == xai.RuntimeModelMappingVersion()
+}
+
 func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]string {
 	if a.Credentials == nil {
 		// 部分平台在未显式配置 model_mapping 时仍应使用默认映射，
@@ -750,8 +755,6 @@ func defaultModelMappingForPlatform(platform string) map[string]string {
 		return domain.DefaultAntigravityModelMapping
 	case domain.PlatformKiro:
 		return domain.DefaultKiroModelMapping
-	case domain.PlatformLeonardo:
-		return domain.DefaultLeonardoModelMapping
 	case domain.PlatformFish:
 		return domain.DefaultFishModelMapping
 	default:
@@ -1000,13 +1003,16 @@ func (a *Account) isModelMappingSupported(requestedModel string) bool {
 	// credentials 里常残留旧的非空 model_mapping，若不在此放行，透传账号会被
 	// model_mapping 白名单错误排除出候选集，导致 no available accounts / 404（issue #4936）。
 	if a.IsOpenAIPassthroughEnabled() {
-		return true
+		if !a.IsOpenAIPassthroughModelFilterEnabled() {
+			return true
+		}
+		// Explicit opt-in filters candidates by source keys only. Forward still
+		// ignores mapping targets and preserves the passthrough request body.
+		mapping := a.GetModelMapping()
+		return len(mapping) == 0 || mappingSupportsRequestedModel(mapping, strings.TrimSpace(requestedModel))
 	}
-	// Leonardo 只服务平台已实现的模型（首期仅 gpt-image-2），自定义映射也绕不过去。
-	if a.Platform == PlatformLeonardo {
-		return leonardoAccountSupportsModel(a, requestedModel)
-	}
-	// fish 同理：token 原生号与中转号都只承接 fish 公共名（gpt-image 家族）。
+	// fish 的 token 原生号与中转号都只承接 fish 公共名（gpt-image 家族），
+	// 自定义映射也绕不过去。
 	if a.Platform == PlatformFish {
 		return fishAccountSupportsModel(a, requestedModel)
 	}
@@ -1559,9 +1565,9 @@ func (a *Account) IsOpenAIApiKey() bool {
 // 适用 openai、国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 OpenCode Go；
 // grok 走 GetGrokBaseURL，此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
-	// Leonardo / fish 中转号借用 OpenAI Images 转发链路做分组兜底，必须返回它
+	// fish 中转号借用 OpenAI Images 转发链路做分组兜底，必须返回它
 	// 自己的 base_url，否则会落到 api.openai.com。
-	if isLeonardoRelayAccount(a) || isFishRelayAccount(a) {
+	if isFishRelayAccount(a) {
 		return strings.TrimRight(strings.TrimSpace(a.GetCredential("base_url")), "/")
 	}
 	if !a.IsOpenAI() && !a.IsMultiProtocolAPIKey() {
@@ -1905,7 +1911,7 @@ func (a *Account) GetOpenAIProtocolAPIKey() string {
 	if a == nil {
 		return ""
 	}
-	if isLeonardoRelayAccount(a) || isFishRelayAccount(a) {
+	if isFishRelayAccount(a) {
 		return a.GetCredential("api_key")
 	}
 	if a.IsMultiProtocolAPIKey() {
@@ -2271,6 +2277,13 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 	return false
 }
 
+// IsOpenAIPassthroughModelFilterEnabled reports the explicit opt-in to model
+// filtering during passthrough account selection. Missing or invalid values
+// preserve the default behavior of ignoring leftover model_mapping entries.
+func (a *Account) IsOpenAIPassthroughModelFilterEnabled() bool {
+	return a.IsOpenAIPassthroughEnabled() && a.Extra["openai_passthrough_model_filter"] == true
+}
+
 // IsOpenAIResponsesWebSocketV2Enabled 返回 OpenAI 账号是否开启 Responses WebSocket v2。
 //
 // 分类型新字段：
@@ -2476,9 +2489,8 @@ func (a *Account) IsAnthropicAPIKeyPassthroughEnabled() bool {
 }
 
 // CreditUnitPriceUSD returns the account-level USD price per upstream credit used
-// for display-only cost estimates (Kiro: extra.kiro_credit_unit_price_usd, Leonardo:
-// extra.leonardo_credit_unit_price_usd). Unset, non-numeric or non-positive values
-// yield 0.
+// for display-only cost estimates (Kiro: extra.kiro_credit_unit_price_usd).
+// Unset, non-numeric or non-positive values yield 0.
 func (a *Account) CreditUnitPriceUSD() float64 {
 	if a == nil || a.Extra == nil {
 		return 0
@@ -2487,8 +2499,6 @@ func (a *Account) CreditUnitPriceUSD() float64 {
 	switch a.Platform {
 	case PlatformKiro:
 		key = "kiro_credit_unit_price_usd"
-	case PlatformLeonardo:
-		key = "leonardo_credit_unit_price_usd"
 	default:
 		return 0
 	}
@@ -2516,12 +2526,6 @@ func (a *Account) CreditUnitPriceUSD() float64 {
 // ValidateKiroCreditUnitPriceFromExtra rejects invalid account-level Kiro credit pricing.
 func ValidateKiroCreditUnitPriceFromExtra(extra map[string]any) error {
 	return validateCreditUnitPriceFromExtra(extra, "kiro_credit_unit_price_usd")
-}
-
-// ValidateLeonardoCreditUnitPriceFromExtra rejects invalid account-level Leonardo
-// credit pricing (USD per Leonardo credit; display-only today-stats estimate).
-func ValidateLeonardoCreditUnitPriceFromExtra(extra map[string]any) error {
-	return validateCreditUnitPriceFromExtra(extra, "leonardo_credit_unit_price_usd")
 }
 
 // validateCreditUnitPriceFromExtra checks extra[key] is a finite number >= 0 and
@@ -2578,10 +2582,8 @@ const (
 // 三态：default（跟随渠道）/ enabled（强制开启）/ disabled（强制关闭）。
 // 兼容旧 bool 值：true→enabled, false→default（并记录 debug 日志）。
 func (a *Account) GetWebSearchEmulationMode() string {
-	// OpenAI API Key accounts reach this via /v1/messages; their upstreams
-	// (DeepSeek etc. over Chat Completions) have no web_search tool.
 	if a == nil || a.Type != AccountTypeAPIKey || a.Extra == nil ||
-		(a.Platform != PlatformAnthropic && a.Platform != PlatformOpenAI) {
+		!webSearchEmulationPlatformEnabled(a.Platform) {
 		return WebSearchModeDefault
 	}
 	raw := a.Extra[featureKeyWebSearchEmulation]
@@ -2603,6 +2605,17 @@ func (a *Account) GetWebSearchEmulationMode() string {
 	default:
 		return WebSearchModeDefault
 	}
+}
+
+// webSearchEmulationPlatformEnabled reports whether API key accounts of the
+// platform can set the account-level web search emulation mode. Keep it in sync
+// with WEB_SEARCH_EMULATION_PLATFORMS in frontend/src/views/admin/ChannelsView.vue.
+func webSearchEmulationPlatformEnabled(platform string) bool {
+	switch platform {
+	case PlatformAnthropic, PlatformOpenAI, PlatformZhipu, PlatformCommandCode, PlatformOpenCodeGo, PlatformMiniMax:
+		return true
+	}
+	return false
 }
 
 // IsCodexCLIOnlyEnabled 返回 OpenAI OAuth 账号是否启用"仅允许 Codex 官方客户端"。

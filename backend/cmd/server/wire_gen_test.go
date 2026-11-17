@@ -83,6 +83,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		emailQueueSvc,
 		billingCacheSvc,
 		&service.UsageRecordWorkerPool{},
+		nil, // usageBillingLanes
 		service.ProvideBalanceNotifyService(nil, nil, nil, nil),
 		service.NewDigestSessionStore(),
 		&service.SubscriptionService{},
@@ -100,6 +101,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // channelMonitorV2Aggregator
 		nil, // quotaFlusher
 		nil, // upstreamBillingProbe
+		nil, // iqCheck
 		nil, // ollamaCloudUsage
 		nil, // opencodeGoUsage
 		nil, // auditLog

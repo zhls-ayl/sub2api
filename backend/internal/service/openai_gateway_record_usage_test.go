@@ -97,47 +97,6 @@ func TestOpenAIGatewayServiceRecordUsage_PersistsKiroCredits(t *testing.T) {
 	require.InDelta(t, 0.17, *usageRepo.lastLog.KiroCredits, 0.000001)
 }
 
-// Leonardo Cookie 号的实扣积分写进同一列（今日统计按账号积分单价估算成本）；
-// 中转号走 OpenAI 兼容上游，没有 Leonardo 积分，不写。
-func TestOpenAIGatewayServiceRecordUsage_PersistsLeonardoCredits(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		accountType string
-		wantCredits bool
-	}{
-		{"cookie", AccountTypeOAuth, true},
-		{"relay", AccountTypeAPIKey, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
-			svc := newOpenAIRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
-
-			err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
-				Result: &OpenAIForwardResult{
-					RequestID:  "leonardo-image:" + tc.name,
-					Model:      "gpt-image-2",
-					ImageCount: 1,
-					ImageSize:  "1K",
-					Usage:      OpenAIUsage{InputTokens: 5, OutputTokens: 272, ImageOutputTokens: 272, KiroCredits: 8},
-					Duration:   time.Second,
-				},
-				APIKey:  &APIKey{ID: 10},
-				User:    &User{ID: 20},
-				Account: &Account{ID: 31, Platform: PlatformLeonardo, Type: tc.accountType},
-			})
-
-			require.NoError(t, err)
-			require.NotNil(t, usageRepo.lastLog)
-			if !tc.wantCredits {
-				require.Nil(t, usageRepo.lastLog.KiroCredits)
-				return
-			}
-			require.NotNil(t, usageRepo.lastLog.KiroCredits)
-			require.InDelta(t, 8, *usageRepo.lastLog.KiroCredits, 0.000001)
-		})
-	}
-}
-
 func TestRecordCyberPolicyUsageLog_BillsRealUpstreamTokens(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}
@@ -545,6 +504,8 @@ func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputToke
 		},
 		User:    &User{ID: 2004},
 		Account: &Account{ID: 3004},
+		// The peak window excludes 23:59, so do not depend on the wall clock.
+		PricingAt: time.Date(2026, time.January, 15, 12, 0, 0, 0, time.UTC),
 	})
 
 	require.NoError(t, err)
@@ -3409,6 +3370,18 @@ func TestGroupBillsOpenAIFastAtStandardRequiresOpenAIAccount(t *testing.T) {
 		apiKey,
 		&Account{Platform: PlatformGrok, Type: AccountTypeAPIKey},
 		"priority",
+	))
+}
+
+// "免费 Fast" 只把 priority 降到 Standard 价；Ultrafast 是独立的更高档位，
+// 分组强制 Ultrafast 时仍按 Ultrafast 计费。
+func TestGroupBillsOpenAIFastAtStandardExcludesUltrafast(t *testing.T) {
+	apiKey := &APIKey{Group: &Group{Platform: PlatformOpenAI, FreeOpenAIFast: true, ForceOpenAIUltrafast: true}}
+
+	require.False(t, groupBillsOpenAIFastAtStandard(
+		apiKey,
+		&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		OpenAIFastTierUltrafast,
 	))
 }
 

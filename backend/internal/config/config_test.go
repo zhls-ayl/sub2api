@@ -800,19 +800,6 @@ func TestLoadImageNonstreamKeepaliveFromEnv(t *testing.T) {
 	require.Equal(t, 15, cfg.Gateway.ImageNonstreamKeepaliveInterval)
 }
 
-func TestLoadLeonardoUsageTokensPerCredit(t *testing.T) {
-	resetViperWithJWTSecret(t)
-	cfg, err := Load()
-	require.NoError(t, err)
-	require.Equal(t, 34.0, cfg.Gateway.LeonardoUsageTokensPerCredit)
-
-	resetViperWithJWTSecret(t)
-	t.Setenv("GATEWAY_LEONARDO_USAGE_TOKENS_PER_CREDIT", "0")
-	cfg, err = Load()
-	require.NoError(t, err)
-	require.Zero(t, cfg.Gateway.LeonardoUsageTokensPerCredit)
-}
-
 func TestLoadOpenAIWSStickyTTLCompatibility(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_WS_STICKY_RESPONSE_ID_TTL_SECONDS", "0")
@@ -1590,18 +1577,20 @@ func TestValidateOpsCleanupScheduleRequired(t *testing.T) {
 
 func TestValidateConcurrencyPingInterval(t *testing.T) {
 	resetViperWithJWTSecret(t)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error: %v", err)
-	}
-	cfg.Concurrency.PingInterval = 3
-	err = cfg.Validate()
-	if err == nil {
-		t.Fatalf("Validate() expected error for concurrency.ping_interval")
-	}
-	if !strings.Contains(err.Error(), "concurrency.ping_interval") {
-		t.Fatalf("Validate() expected concurrency.ping_interval error, got: %v", err)
+	for _, interval := range []int{-1, 0, 1, 3, 4, 5, 10, 30, 31} {
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		cfg.Concurrency.PingInterval = interval
+		err = cfg.Validate()
+		valid := interval == 0 || (interval >= 5 && interval <= 30)
+		if valid && err != nil {
+			t.Errorf("Validate() interval %d: %v", interval, err)
+		}
+		if !valid && (err == nil || !strings.Contains(err.Error(), "concurrency.ping_interval")) {
+			t.Errorf("Validate() interval %d: expected concurrency.ping_interval error, got %v", interval, err)
+		}
 	}
 }
 
@@ -2149,11 +2138,6 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway image nonstream keepalive negative",
 			mutate:  func(c *Config) { c.Gateway.ImageNonstreamKeepaliveInterval = -1 },
 			wantErr: "gateway.image_nonstream_keepalive_interval must be non-negative",
-		},
-		{
-			name:    "gateway leonardo usage tokens per credit negative",
-			mutate:  func(c *Config) { c.Gateway.LeonardoUsageTokensPerCredit = -1 },
-			wantErr: "gateway.leonardo_usage_tokens_per_credit must be non-negative",
 		},
 		{
 			name:    "gateway image stream data interval range",

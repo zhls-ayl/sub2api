@@ -112,13 +112,6 @@ export default {
       kiroCooldown: 'Kiro Cooldown',
       kiroCreditUnitPriceUsd: 'Credit Unit Price',
       kiroCreditUnitPriceUsdHint: 'Used only to estimate Kiro Credits cost in today stats. 0 hides the estimate.',
-      leonardoCreditUnitPriceUsd: 'Credit Unit Price (USD)',
-      leonardoCreditUnitPriceUsdHint: 'Used only to estimate the cost of Leonardo credits in today stats; 0 hides the estimate. Reference (monthly fee ÷ monthly fast credits): Essential $12 / 8,500 ≈ $0.0014, Premium $30 / 25,000 = $0.0012, Ultimate $60 / 60,000 = $0.001. Annual billing is cheaper.',
-      leonardoMaxQuality: 'Max quality',
-      leonardoMaxQualityUnlimited: 'Unlimited',
-      leonardoMaxShortEdge: 'Max short edge (px)',
-      leonardoMaxUpscaleFactor: 'Max upscale factor',
-      leonardoImageLimitsHint: 'Caps Leonardo credit usage. Requests above the max quality are generated at the max quality. When the requested short edge exceeds the limit, a smaller image with the exact same aspect ratio is generated and then upscaled to the requested size (no stretching or cropping); billing follows the delivered size. 0 / Unlimited means no limit; the upscale factor defaults to 2 (1–4).',
       fishMaxQuality: 'Max quality',
       fishMaxQualityUnlimited: 'Unlimited',
       fishMaxQualityHint: 'Requests above the max quality are generated at the max quality. The response still echoes the requested quality. Unlimited means no cap. gpt-image-2.5 also supports xhigh and max; max is the highest tier.',
@@ -129,7 +122,6 @@ export default {
       kiroUsageForbidden: 'Usage Forbidden',
       kiroUsageForbiddenHint: 'Usage fetch is blocked for this account, but request forwarding may still work',
       platforms: {
-        leonardo: 'Leonardo',
         anthropic: 'Anthropic',
         claude: 'Claude',
         openai: 'OpenAI',
@@ -247,8 +239,6 @@ export default {
         grokOauth: 'Grok OAuth',
         kiroApikey: 'Connect to AWS directly via API Key',
         kiroApikeyRelay: 'Relay via external API Key + Base URL',
-        leonardoOauth: 'Leonardo web Cookie, direct GraphQL',
-        leonardoApikeyRelay: 'OpenAI-compatible relay fallback',
         fishOauthToken: 'API Key',
         fishOauth: 'Connect to Fish Audio directly with an API Key',
         fishApikeyRelay: 'OpenAI-compatible relay fallback',
@@ -293,6 +283,43 @@ export default {
         viewTempUnschedDetails: 'View temp unschedulable details',
         tempUnschedulableUntil: 'Resumes {time}'
       },
+      iqCheck: {
+        title: 'IQ check',
+        hint: 'Periodically asks 2 random reasoning questions. Record only: just tracks results. Auto stop: 3 or more wrong answers across the last two rounds (4 questions) stop scheduling; a later fully correct round turns it back on.',
+        model: 'Check model',
+        modelPlaceholder: 'Leave empty for the default test model',
+        interval: 'Interval (minutes, 10–1440)',
+        modes: {
+          record: 'Record only',
+          auto: 'Auto stop scheduling'
+        },
+        stoppedWarning: 'The IQ check has stopped scheduling for this account. Turning the check off does not turn scheduling back on; do that by hand.',
+        status: {
+          pending: 'Pending',
+          passed: 'Normal',
+          wrong: 'Wrong {wrong}/{total}',
+          triggered: 'Downgrade threshold reached',
+          disabled: 'Downgraded · scheduling stopped',
+          unknown: 'Unknown'
+        },
+        drawing: {
+          title: 'Pelican riding a bicycle',
+          view: 'View larger',
+          failed: 'No drawing',
+          meta: 'Model {model} · {seconds}s · {time}'
+        },
+        details: {
+          mode: 'Mode: {mode}',
+          off: 'Check is off',
+          checkedAt: 'Last check: {time}',
+          score: 'This round: {correct}/{total} correct',
+          recent: 'Wrong in last two rounds: {wrong}/4',
+          accuracy: 'Total correct: {correct}/{answered} ({percent}%)',
+          model: 'Model: {model}',
+          error: 'Error: {error}',
+          nextCheckAt: 'Next check: {time}'
+        }
+      },
       columns: {
         name: 'Name',
         id: 'Account ID',
@@ -308,6 +335,7 @@ export default {
         schedulerScore: 'Scheduler Score',
         status: 'Status',
         schedulable: 'Schedulable',
+        iqCheck: 'IQ check',
         todayStats: 'Today Stats',
         groups: 'Groups',
         usageWindows: 'Usage Windows',
@@ -683,6 +711,9 @@ export default {
         oauthPassthrough: 'Auto passthrough (auth only)',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',
+        passthroughModelFilter: 'Filter passthrough accounts by model',
+        passthroughModelFilterDesc:
+          'Use the account model whitelist and mapping source names to select this account. Mapping targets do not rename passthrough requests. An empty list allows all models. Disabled by default.',
         flattenNamespaces: 'Flatten Codex namespace tools (compatibility)',
         flattenNamespacesDesc:
           'Disabled by default: Codex namespace tool declarations are forwarded as-is on /responses, which is what the ChatGPT Codex backend expects. Enable only when this OAuth account is routed to a relay that rejects namespace tools — flattening renames them to namespace__tool, which breaks models that address collaboration tools as functions.<namespace>.<tool>. Compaction requests always flatten regardless of this switch.',
@@ -797,7 +828,7 @@ export default {
         testMode: 'Test mode',
         testModeDefault: 'Default request',
         testModeCompact: 'Compact probe',
-        modelRestrictionDisabledByPassthrough: 'Automatic passthrough is enabled: model whitelist/mapping will not take effect.',
+        modelRestrictionDisabledByPassthrough: 'Automatic passthrough ignores model restrictions by default. Enable "Filter passthrough accounts by model" to use them for account selection only.',
       },
       grok: {
         baseUrlHint: 'Grok OAuth accounts forward to the official xAI API base URL.',
@@ -902,6 +933,7 @@ export default {
       enterCustomModelName: 'Enter custom model name',
       addModel: 'Add',
       modelExists: 'Model already exists',
+      modelWildcardNotSupported: 'Wildcards are not supported in the model whitelist. Enter an exact model name.',
       modelMappingConflict: 'A mapping already exists for {from} → {to}. Modify or remove it under Model Mapping before adding this whitelist model',
       modelCount: '{count} models',
       poolMode: 'Pool Mode',
@@ -1828,8 +1860,7 @@ export default {
         usageTrend: '30-Day Cost & Request Trend',
         noData: 'No usage data available for this account',
         approxCost: 'approx. {amount}',
-        kiroCredits: 'Credits Used',
-        leonardoCredits: 'Credits Used'
+        kiroCredits: 'Credits Used'
       },
       fish: {
         tokenLabel: 'API Key',
@@ -1838,22 +1869,8 @@ export default {
         relayApiKeyHint: 'API key for the relay upstream (sent as Authorization: Bearer)',
         relayBaseUrlHint: 'Handles requests fish native accounts cannot (sizes outside the allowlist, mask, n>8, webp). Channel mapping rewrites the model name, for example gpt-image-2 to gpt-image-1.'
       },
-      leonardo: {
-        cookieLabel: 'Leonardo Cookie',
-        cookieHint: 'Log in to app.leonardo.ai, then copy the full cookie string from DevTools (Application → Cookies or a request Cookie header). Must include __Secure-better-auth.session_token; session_data.* shards are recommended. A bare session token value also works. The short-lived JWT is exchanged and kept alive automatically from this cookie.',
-        cookiePlaceholder: '__Secure-better-auth.session_token=...; __Secure-better-auth.session_data.0=...',
-        cookieRequired: 'Leonardo cookie is required',
-        relayApiKeyHint: "API key for the relay upstream (sent as Authorization: Bearer)",
-        relayBaseUrlHint: 'OpenAI-compatible upstream (official https://api.openai.com or a third-party relay); fallback when native accounts fail'
-      },
 
       usageWindow: {
-        leonardoCredits: 'Credits',
-        leonardoFast: 'Fast Tokens',
-        leonardoFastDaily: 'Fast Tokens (daily)',
-        leonardoRollover: 'Rollover Bank',
-        leonardoTopUp: 'Top-up',
-        leonardoReset: 'Reset',
         statsTitle: '5-Hour Window Usage Statistics',
         statsTitleDaily: 'Daily Usage Statistics',
         geminiProDaily: 'Pro',
@@ -1899,6 +1916,10 @@ export default {
         kiroReset: 'Reset',
         kiroBonusGift: 'Bonus credits',
         kiroOverage: 'Overage',
+        quotaRefreshFailedCached: 'Refresh failed. Showing a previous observation; remaining quota is unconfirmed.',
+        quotaRefreshFailedUnknown: 'Refresh failed. Current quota is unknown.',
+        quotaObservedAt: 'Quota observed: ',
+        quotaObservationUnknown: 'Unknown (cached)',
         estimatedTotalCost: 'Est. total ${cost}',
         estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization'
       },

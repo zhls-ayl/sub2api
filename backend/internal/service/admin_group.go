@@ -409,8 +409,6 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		return DefaultOpenCodeGoModelIDs()
 	case PlatformTypeSafe:
 		return []string{typesafe.JevLatestModel}
-	case PlatformLeonardo:
-		return LeonardoModelIDs()
 	case PlatformFish:
 		return domain.FishModelNames()
 	case PlatformComposite:
@@ -428,10 +426,10 @@ func defaultModelsListCandidateIDs(platform string) []string {
 // image generation. CreateGroup ORs the requested value with it, so a false in the create
 // request does not turn it off. Composite defaults disabled because the same switch also
 // gates OpenAI image generation there. Grok image and video generation share this gate;
-// Leonardo and Fish are images-only platforms, so they default enabled too.
+// Fish is an images-only platform, so it defaults enabled too.
 func DefaultAllowImageGenerationForPlatform(platform string) bool {
 	switch platform {
-	case PlatformGrok, PlatformGemini, PlatformAntigravity, PlatformLeonardo, PlatformFish:
+	case PlatformGrok, PlatformGemini, PlatformAntigravity, PlatformFish:
 		return true
 	default:
 		return false
@@ -513,6 +511,7 @@ func sanitizeGroupOpenAIFast(group *Group) {
 	if group == nil || !groupSupportsOpenAIFast(group.Platform) {
 		if group != nil {
 			group.ForceOpenAIFast = false
+			group.ForceOpenAIUltrafast = false
 			group.FreeOpenAIFast = false
 		}
 	}
@@ -799,6 +798,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		AllowMessagesDispatch:           input.AllowMessagesDispatch,
 		AllowLive:                       input.AllowLive,
 		ForceOpenAIFast:                 input.ForceOpenAIFast,
+		ForceOpenAIUltrafast:            input.ForceOpenAIUltrafast,
 		FreeOpenAIFast:                  input.FreeOpenAIFast,
 		RequireOAuthOnly:                input.RequireOAuthOnly,
 		RequirePrivacySet:               input.RequirePrivacySet,
@@ -1211,6 +1211,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.ForceOpenAIFast != nil {
 		group.ForceOpenAIFast = *input.ForceOpenAIFast
+	}
+	if input.ForceOpenAIUltrafast != nil {
+		group.ForceOpenAIUltrafast = *input.ForceOpenAIUltrafast
 	}
 	if input.FreeOpenAIFast != nil {
 		group.FreeOpenAIFast = *input.FreeOpenAIFast

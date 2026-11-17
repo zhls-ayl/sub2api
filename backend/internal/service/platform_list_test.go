@@ -19,7 +19,6 @@ var (
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe,
 		PlatformCommandCode,
 		PlatformCline,
-		PlatformLeonardo,
 		PlatformFish,
 	}
 	legacySchedulerSnapshotPlatforms = []string{
@@ -27,7 +26,6 @@ var (
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe,
 		PlatformCommandCode,
 		PlatformCline,
-		PlatformLeonardo,
 		PlatformFish,
 	}
 	legacyCompositeMatchingPlatforms = legacySchedulerSnapshotPlatforms
@@ -63,7 +61,7 @@ func legacyIsUpstreamBillingProbeIdentity(platform, accountType string) bool {
 	switch platform {
 	case PlatformOpenAI, PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformKiro, PlatformGrok,
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo,
-		PlatformTypeSafe, PlatformCommandCode, PlatformCline, PlatformLeonardo, PlatformFish:
+		PlatformTypeSafe, PlatformCommandCode, PlatformCline, PlatformFish:
 		return true
 	}
 	return false

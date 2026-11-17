@@ -124,11 +124,21 @@
 
     <!-- OpenAI OAuth accounts: single source from /usage API -->
     <template v-else-if="account.platform === 'openai' && account.type === 'oauth'">
+      <div
+        v-if="error || usageInfo?.error || usageInfo?.error_code"
+        role="alert"
+        class="mb-1 text-[10px] text-amber-700 dark:text-amber-300"
+      >
+        {{ t(hasOpenAIQuotaObservation
+          ? 'admin.accounts.usageWindow.quotaRefreshFailedCached'
+          : 'admin.accounts.usageWindow.quotaRefreshFailedUnknown') }}
+      </div>
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
         <UsageProgressBar
           v-if="usageInfo?.five_hour"
           label="5h"
           :utilization="usageInfo.five_hour.utilization"
+          :utilization-unknown="usageInfo.five_hour.utilization_unknown"
           :resets-at="usageInfo.five_hour.resets_at"
           :window-stats="usageInfo.five_hour.window_stats"
           :show-now-when-idle="true"
@@ -138,12 +148,20 @@
           v-if="usageInfo?.seven_day"
           label="7d"
           :utilization="usageInfo.seven_day.utilization"
+          :utilization-unknown="usageInfo.seven_day.utilization_unknown"
           :resets-at="usageInfo.seven_day.resets_at"
           :window-stats="usageInfo.seven_day.window_stats"
           :estimated-total-cost="openAISevenDayEstimatedTotalCost"
           :show-now-when-idle="true"
           color="emerald"
         />
+        <div v-if="hasOpenAIQuotaObservation" class="text-[10px] text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.usageWindow.quotaObservedAt') }}
+          <time v-if="usageInfo?.updated_at" :datetime="usageInfo.updated_at">
+            {{ formatDateTime(usageInfo.updated_at) }}
+          </time>
+          <span v-else>{{ t('admin.accounts.usageWindow.quotaObservationUnknown') }}</span>
+        </div>
         <!--
           Upstream codex /wham/usage quota query + reset. The local active-sampling
           refresh button is rendered via the pre-actions slot so the user sees a
@@ -625,7 +643,7 @@
             color="purple"
           />
         </template>
-        <div v-if="loading" class="space-y-1">
+        <div v-if="loading && !usageInfo" class="space-y-1">
           <div class="flex items-center gap-1">
             <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
             <div class="h-1.5 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
@@ -734,87 +752,6 @@
           </span>
           <span v-if="kiroOverageSummary" class="inline-flex items-center gap-1 font-medium text-amber-700 dark:text-amber-300">
             {{ kiroOverageSummary }}
-          </span>
-        </div>
-        <div class="flex items-center gap-1.5 mt-0.5">
-          <button
-            type="button"
-            class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
-            :disabled="activeQueryLoading"
-            @click="loadActiveUsage"
-          >
-            <svg
-              class="h-2.5 w-2.5"
-              :class="{ 'animate-spin': activeQueryLoading }"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-            {{ t('admin.accounts.usageWindow.activeQuery') }}
-          </button>
-        </div>
-      </div>
-      <div v-else class="text-xs text-gray-400">-</div>
-    </template>
-
-    <!-- Leonardo Cookie 号：Fast / Rollover 进度条（剩余 / 上限）+ Top-up 数字 + 重置日期 -->
-    <template v-else-if="isLeonardoUsageAccount">
-      <div v-if="loading" class="space-y-1.5">
-        <div class="h-4 w-24 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
-        <div class="space-y-1">
-          <div class="h-1.5 w-32 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
-          <div class="h-1.5 w-28 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
-        </div>
-      </div>
-      <div v-else-if="error" class="text-xs text-red-500">
-        {{ error }}
-      </div>
-      <div v-else-if="leonardoUsageAvailable" class="space-y-2" data-testid="leonardo-usage">
-        <div v-if="leonardoPlanLabel" class="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span class="inline-flex items-center rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
-            {{ leonardoPlanLabel }}
-          </span>
-        </div>
-
-        <div v-if="leonardoCredits" class="space-y-1" data-testid="leonardo-fast">
-          <div class="flex items-baseline justify-between gap-2 text-[11px] text-gray-600 dark:text-gray-300">
-            <span class="font-medium tracking-[0.01em]">{{ leonardoCredits.fast_daily ? t('admin.accounts.usageWindow.leonardoFastDaily') : t('admin.accounts.usageWindow.leonardoFast') }}</span>
-            <span class="font-semibold tabular-nums text-gray-700 dark:text-gray-200">
-              {{ formatLeonardoTokens(leonardoCredits.subscription) }}<template v-if="leonardoFastLimit > 0"> / {{ formatLeonardoTokens(leonardoFastLimit) }}</template>
-            </span>
-          </div>
-          <div v-if="leonardoFastLimit > 0" class="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-            <div :class="['h-full rounded-full transition-all', leonardoFastBarClass]" :style="{ width: `${leonardoFastPercent}%` }"></div>
-          </div>
-        </div>
-
-        <div v-if="leonardoShowRollover" class="space-y-1" data-testid="leonardo-rollover">
-          <div class="flex items-baseline justify-between gap-2 text-[11px] text-gray-600 dark:text-gray-300">
-            <span class="font-medium tracking-[0.01em]">{{ t('admin.accounts.usageWindow.leonardoRollover') }}</span>
-            <span class="font-semibold tabular-nums text-gray-700 dark:text-gray-200">
-              {{ formatLeonardoTokens(leonardoCredits?.rollover) }}<template v-if="leonardoRolloverLimit > 0"> / {{ formatLeonardoTokens(leonardoRolloverLimit) }}</template>
-            </span>
-          </div>
-          <div v-if="leonardoRolloverLimit > 0" class="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-            <div class="h-full rounded-full bg-sky-500 transition-all" :style="{ width: `${leonardoRolloverPercent}%` }"></div>
-          </div>
-        </div>
-
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
-          <span v-if="leonardoCredits" class="inline-flex items-center gap-1" data-testid="leonardo-topup">
-            <span class="text-gray-400 dark:text-gray-500">{{ t('admin.accounts.usageWindow.leonardoTopUp') }}</span>
-            <span class="font-medium tabular-nums text-gray-600 dark:text-gray-300">{{ formatLeonardoTokens(leonardoCredits.paid) }}</span>
-          </span>
-          <span v-if="leonardoResetDisplay" class="inline-flex items-center gap-1">
-            <span class="text-gray-400 dark:text-gray-500">{{ t('admin.accounts.usageWindow.leonardoReset') }}</span>
-            <span class="font-medium tabular-nums text-gray-600 dark:text-gray-300">{{ leonardoResetDisplay }}</span>
           </span>
         </div>
         <div class="flex items-center gap-1.5 mt-0.5">
@@ -1005,7 +942,7 @@ import type { Account, AccountUsageInfo, GeminiCredentials, WindowStats } from '
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { isKiroDirectApiKeyAccount } from '@/utils/kiroAccount'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
-import { formatCompactNumber } from '@/utils/format'
+import { formatCompactNumber, formatDateTime } from '@/utils/format'
 import { isOfficialGeminiBaseUrl } from '@/utils/geminiExplicitCache'
 import { supportsAccountQuota } from '@/utils/accountQuota'
 import UsageProgressBar from './UsageProgressBar.vue'
@@ -1051,7 +988,6 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   kiroUsageMeta: [meta: { plan_type?: string; kiro_overages_enabled?: boolean }]
-  leonardoUsageMeta: [meta: { plan_type?: string }]
   fishUsageMeta: [meta: { plan_type?: string }]
   'account-updated': [account: Account]
   'usage-loaded': [usage: AccountUsageInfo]
@@ -1136,11 +1072,6 @@ const shouldFetchUsage = computed(() => {
   if (props.account.platform === 'openai') {
     return props.account.type === 'oauth'
   }
-  // Leonardo Cookie 号查积分余额；中转号没有 Leonardo 用量。必须与
-  // isLeonardoUsageAccount 同口径，否则积分模板永远拿不到数据。
-  if (props.account.platform === 'leonardo') {
-    return props.account.type === 'oauth'
-  }
   if (props.account.platform === 'fish') {
     return isFishUsageAccount.value
   }
@@ -1175,11 +1106,17 @@ const hasOpenAIUsageFallback = computed(() => {
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
 })
 
+const hasOpenAIQuotaObservation = computed(() => {
+  const windows = [usageInfo.value?.five_hour, usageInfo.value?.seven_day]
+  return windows.some(window => window && !window.utilization_unknown)
+})
+
 const openAISevenDayEstimatedTotalCost = computed(() => {
   const sevenDay = usageInfo.value?.seven_day
   const utilization = sevenDay?.utilization
   const currentCost = sevenDay?.window_stats?.cost
   if (
+    sevenDay?.utilization_unknown ||
     typeof utilization !== 'number' ||
     typeof currentCost !== 'number' ||
     !Number.isFinite(utilization) ||
@@ -1807,11 +1744,6 @@ const isKiroUsageAccount = computed(() => {
     (props.account.type === 'oauth' || isKiroDirectApiKeyAccount(props.account))
 })
 
-// Leonardo 原生账号：展示积分余额；中转账号无 Leonardo 用量，按通用处理。
-const isLeonardoUsageAccount = computed(() =>
-  props.account.platform === 'leonardo' && props.account.type === 'oauth'
-)
-
 // Fish token 号（无 base_url）才有钱包与每日出图窗口。
 const isFishUsageAccount = computed(() => {
   if (props.account.platform !== 'fish' || props.account.type !== 'apikey') return false
@@ -1820,56 +1752,17 @@ const isFishUsageAccount = computed(() => {
 })
 
 const defaultUsageSource = computed<'passive' | 'active' | undefined>(() => {
-  if (isAnthropicOAuthOrSetupToken.value || isKiroUsageAccount.value || isLeonardoUsageAccount.value || isFishUsageAccount.value) {
+  if (isAnthropicOAuthOrSetupToken.value || isKiroUsageAccount.value || isFishUsageAccount.value) {
     return 'passive'
   }
   return undefined
 })
 
 const manualRefreshUsageSource = computed<'passive' | 'active' | undefined>(() => {
-  if (isKiroUsageAccount.value || isLeonardoUsageAccount.value || isFishUsageAccount.value) {
+  if (isKiroUsageAccount.value || isFishUsageAccount.value) {
     return 'active'
   }
   return defaultUsageSource.value
-})
-
-const leonardoUsageAvailable = computed(() =>
-  !!(usageInfo.value?.leonardo_credits || usageInfo.value?.leonardo_plan)
-)
-
-// Leonardo 积分池：上限来自后端的套餐常量表，未知套餐时为 0（只显示数字、不画进度条）。
-const leonardoCredits = computed(() => usageInfo.value?.leonardo_credits ?? null)
-const leonardoPlanLabel = computed(() =>
-  (usageInfo.value?.leonardo_plan_name || usageInfo.value?.leonardo_plan || '').trim()
-)
-const leonardoFastLimit = computed(() => leonardoCredits.value?.fast_limit ?? 0)
-const leonardoRolloverLimit = computed(() => leonardoCredits.value?.rollover_limit ?? 0)
-const leonardoPercent = (remaining?: number | null, limit?: number | null) =>
-  limit && limit > 0 ? clampPercent(((remaining ?? 0) / limit) * 100) : 0
-// 进度条按剩余比例画（与官网「剩余 / 上限」一致），越用越短。
-const leonardoFastPercent = computed(() =>
-  leonardoPercent(leonardoCredits.value?.subscription, leonardoFastLimit.value)
-)
-const leonardoFastBarClass = computed(() => {
-  if (leonardoFastPercent.value < 5) return 'bg-red-500'
-  if (leonardoFastPercent.value < 20) return 'bg-amber-500'
-  return 'bg-emerald-500'
-})
-const leonardoRolloverPercent = computed(() =>
-  leonardoPercent(leonardoCredits.value?.rollover, leonardoRolloverLimit.value)
-)
-// 免费套餐没有 Rollover Bank：容量与余额都为 0 时整行隐藏。
-const leonardoShowRollover = computed(() =>
-  !!leonardoCredits.value && (leonardoRolloverLimit.value > 0 || (leonardoCredits.value.rollover ?? 0) > 0)
-)
-const formatLeonardoTokens = (value?: number | null) =>
-  (value != null && Number.isFinite(value) ? value : 0).toLocaleString()
-const leonardoResetDisplay = computed(() => {
-  const raw = usageInfo.value?.leonardo_token_renewal
-  if (!raw) return ''
-  const parsed = new Date(raw)
-  if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toLocaleDateString()
 })
 
 const kiroUsageAvailable = computed(() => {
@@ -1898,21 +1791,6 @@ const syncKiroUsageMeta = (info?: AccountUsageInfo | null) => {
   })
 }
 
-// Leonardo 套餐与 Kiro 同源（用量接口），优先展示名（如 Ultimate），回退原始 plan 码。
-const syncLeonardoUsageMeta = (info?: AccountUsageInfo | null) => {
-  if (!isLeonardoUsageAccount.value) return
-
-  const planType = (
-    info?.leonardo_plan_name ||
-    info?.leonardo_plan ||
-    ''
-  ).trim()
-
-  emit('leonardoUsageMeta', {
-    ...(planType ? { plan_type: planType } : {})
-  })
-}
-
 const syncFishUsageMeta = (info?: AccountUsageInfo | null) => {
   if (!isFishUsageAccount.value) return
   const planType = (info?.fish_plan || '').trim()
@@ -1923,7 +1801,6 @@ const syncFishUsageMeta = (info?: AccountUsageInfo | null) => {
 
 const syncUsageMeta = (info?: AccountUsageInfo | null) => {
   syncKiroUsageMeta(info)
-  syncLeonardoUsageMeta(info)
   syncFishUsageMeta(info)
 }
 
@@ -2187,16 +2064,23 @@ const attachVisibilityObserver = () => {
 }
 
 const loadActiveUsage = async () => {
+  const accountID = props.account.id
   activeQueryLoading.value = true
+  error.value = null
   try {
-    const result = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
-    usageInfo.value = result
-    syncUsageMeta(result)
-    _usageCache.set(props.account.id, { data: result, ts: Date.now() })
+    const result = await adminAPI.accounts.getUsage(accountID, 'active', true)
+    if (!unmounted.value && props.account.id === accountID) {
+      usageInfo.value = result
+      syncUsageMeta(result)
+      _usageCache.set(accountID, { data: result, ts: Date.now() })
+    }
   } catch (e: any) {
-    console.error('Failed to load active usage:', e)
+    if (!unmounted.value && props.account.id === accountID) {
+      error.value = t('common.error')
+      console.error('Failed to load active usage:', e)
+    }
   } finally {
-    activeQueryLoading.value = false
+    if (!unmounted.value) activeQueryLoading.value = false
   }
 }
 

@@ -651,6 +651,7 @@ export interface AdminGroup extends Group {
   // 管理端的 name / description 始终是原字段，各语言译文另放在 i18n 里
   i18n?: GroupI18n
   force_openai_fast: boolean
+  force_openai_ultrafast: boolean
   free_openai_fast: boolean
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
   // 分组利润控制（openai/anthropic/gemini/grok/antigravity 分组可启用；margin/buffer 为小数存储）。
@@ -826,6 +827,7 @@ export interface CreateGroupRequest {
   monthly_limit_usd?: number | null
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
+  force_openai_ultrafast?: boolean
   free_openai_fast?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
@@ -902,6 +904,7 @@ export interface UpdateGroupRequest {
   monthly_limit_usd?: number | null
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
+  force_openai_ultrafast?: boolean
   free_openai_fast?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
@@ -1127,6 +1130,36 @@ export interface UpstreamBillingData {
 
 export type UpstreamBillingProbeStatus = 'ok' | 'unsupported' | 'failed'
 
+/** Last IQ check result, written by the backend IQ check service. */
+export interface IQCheckState {
+  checked_at?: string
+  next_check_at?: string
+  result?: 'passed' | 'failed' | 'unknown'
+  correct?: number
+  total?: number
+  error?: string
+  /** Wrong answers in the last round, and in the last two rounds together. */
+  last_round_wrong?: number
+  recent_wrong?: number
+  /** Cumulative answered and correct questions for stats_model. */
+  answered?: number
+  answered_correct?: number
+  stats_model?: string
+  disabled_by_check?: boolean
+  model?: string
+}
+
+/** Latest IQ check drawing of an account (GET /admin/accounts/iq-check-drawings). */
+export interface IQCheckDrawing {
+  account_id: number
+  /** Empty when the drawing failed; see error. */
+  svg: string
+  error: string
+  model: string
+  latency_ms: number
+  drawn_at: string
+}
+
 export interface UpstreamBillingProbeSnapshot {
   status: UpstreamBillingProbeStatus
   data?: UpstreamBillingData
@@ -1305,14 +1338,15 @@ export interface Account {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
 kiro_credit_unit_price_usd?: number
-    leonardo_credit_unit_price_usd?: number
-    leonardo_max_quality?: string
-    leonardo_max_short_edge?: number
-    leonardo_max_upscale_factor?: number
     fish_max_quality?: string
     upstream_billing_probe_enabled?: boolean
     upstream_billing_rate_sync_enabled?: boolean
     upstream_billing_probe?: UpstreamBillingProbeSnapshot
+    iq_check_enabled?: boolean
+    iq_check_auto_disable?: boolean
+    iq_check_model?: string
+    iq_check_interval_minutes?: number
+    iq_check_state?: IQCheckState
     codex_reset_credit_snapshot?: {
       available_count?: number
       credits?: { expires_at?: string }[]
@@ -1471,6 +1505,7 @@ export interface WindowStats {
 
 export interface UsageProgress {
   utilization: number // Percentage (0-100+, 100 = 100%)
+  utilization_unknown?: boolean
   resets_at: string | null
   remaining_seconds: number
   window_stats?: WindowStats | null // 窗口期统计（从窗口开始到当前的使用量）
@@ -1525,18 +1560,6 @@ export interface KiroOverageInfo {
   overage_charges: number
   currency_code?: string
   currency_symbol?: string
-}
-
-// Leonardo 积分余额快照：上游只给各池剩余量，上限来自套餐常量表（未知套餐时为 0）
-export interface LeonardoCreditsSnapshot {
-  total: number
-  usable?: number
-  subscription: number
-  paid: number
-  rollover: number
-  fast_limit?: number
-  rollover_limit?: number
-  fast_daily?: boolean
 }
 
 export interface GrokQuotaWindow {
@@ -1640,12 +1663,6 @@ export interface AccountUsageInfo {
   fish_credits?: KiroCreditProgress | null
   fish_daily?: KiroCreditProgress | null
   fish_reset_at?: string | null
-
-  // Leonardo 积分余额快照
-  leonardo_plan?: string | null
-  leonardo_plan_name?: string | null
-  leonardo_credits?: LeonardoCreditsSnapshot | null
-  leonardo_token_renewal?: string | null
 
   // Antigravity 403 forbidden 状态
   is_forbidden?: boolean
@@ -2012,7 +2029,7 @@ export interface AdminUsageLog extends UsageLog {
   account_rate_multiplier?: number | null
   // 自定义定价规则计算的账号统计费用（nil 时使用 total_cost * multiplier）
   account_stats_cost?: number | null
-  // 本次消耗的上游积分（Kiro credits / Leonardo 积分，仅管理员可见）
+  // 本次消耗的上游积分（Kiro credits，仅管理员可见）
   upstream_credits?: number | null
   // 按账号当前积分单价估算的上游成本（USD，未设单价时为空）
   upstream_credit_cost?: number | null
@@ -2199,8 +2216,9 @@ export interface EndpointStat {
   endpoint: string
   requests: number
   total_tokens: number
-  cost: number
-  actual_cost: number
+  cost: number // 标准计费
+  actual_cost: number // 实际扣除
+  account_cost?: number // 账号成本（仅管理员接口返回）
 }
 
 export interface GroupStat {

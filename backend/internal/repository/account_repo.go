@@ -75,6 +75,9 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_referral_snapshot":    {},
 	"grok_billing_snapshot":      {},
 	"session_window_utilization": {},
+	// IQ check state is written on every claim and round; selection reads the
+	// schedulable column the check toggles, never this key.
+	"iq_check_state": {},
 }
 
 const postgresParameterBatchSize = 50000
@@ -1368,20 +1371,9 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 	}
 	args := []any{pq.Array(options.Platforms), options.AfterID, options.Limit}
 	if options.RequireRefreshToken {
-		if len(options.CookieCredentialPlatforms) > 0 {
-			// Leonardo 等平台没有 refresh_token，长期凭据是 cookie：按平台
-			// 分别要求对应凭据非空。
-			args = append(args, pq.Array(options.CookieCredentialPlatforms))
-			query += `
-			AND (
-				(credentials ? 'refresh_token' AND btrim(credentials->>'refresh_token') <> '')
-				OR (platform = ANY($4) AND btrim(COALESCE(credentials->>'cookie', '')) <> '')
-			)`
-		} else {
-			query += `
+		query += `
 			AND credentials ? 'refresh_token'
 			AND btrim(credentials->>'refresh_token') <> ''`
-		}
 	}
 	if options.ExcludeRetryCooldown {
 		query += `
@@ -1495,9 +1487,37 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 	caseSQL += " END, updated_at = NOW() WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
 	args = append(args, pq.Array(ids))
 
-	_, err := r.sql.ExecContext(ctx, caseSQL, args...)
+	// 同一事务内先按 id 升序锁定目标行再更新，与计费合并事务锁多个账号行的顺序一致；
+	// 锁强度与更新非键列相同，不阻塞引用 accounts 的外键检查。
+	exec := r.sql
+	var tx *sql.Tx
+	if db, ok := r.sql.(*sql.DB); ok {
+		var err error
+		if tx, err = db.BeginTx(ctx, nil); err != nil {
+			return err
+		}
+		defer func() {
+			if tx != nil {
+				_ = tx.Rollback()
+			}
+		}()
+		exec = tx
+	}
+	rows, err := exec.QueryContext(ctx, "SELECT id FROM accounts WHERE id = ANY($1) AND deleted_at IS NULL ORDER BY id FOR NO KEY UPDATE", pq.Array(ids))
 	if err != nil {
 		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if _, err := exec.ExecContext(ctx, caseSQL, args...); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		tx = nil
 	}
 	lastUsedPayload := make(map[string]int64, len(updates))
 	for id, ts := range updates {
@@ -1741,170 +1761,6 @@ func (r *accountRepository) SetGrokOAuthRefreshErrorIfCredentialsUnchanged(
 		service.StatusActive,
 		string(expectedJSON),
 		expectedProxyID,
-		service.SchedulerOutboxEventAccountChanged,
-	)
-	if err != nil {
-		return false, err
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	if rowsAffected == 0 {
-		return false, nil
-	}
-	r.syncSchedulerAccountSnapshotDetached(ctx, id)
-	return true, nil
-}
-
-// SetLeonardoErrorIfCookieUnchanged marks a Leonardo OAuth account as error only
-// while its cookie still equals the one the upstream rejected. A cookie the
-// admin replaced during the round trip is not quarantined by the stale verdict.
-// The scheduler outbox insert shares the statement.
-func (r *accountRepository) SetLeonardoErrorIfCookieUnchanged(
-	ctx context.Context,
-	id int64,
-	expectedCookie string,
-	errorMsg string,
-) (bool, error) {
-	if r == nil || r.sql == nil {
-		return false, errors.New("account repository SQL executor is not configured")
-	}
-	if strings.TrimSpace(expectedCookie) == "" {
-		return false, errors.New("leonardo error update requires the cookie used for refresh")
-	}
-	result, err := r.sql.ExecContext(ctx, `
-		WITH updated AS (
-		UPDATE accounts AS a
-		SET status = $1,
-			error_message = $2,
-			schedulable = FALSE,
-			updated_at = NOW()
-		WHERE a.id = $3
-			AND a.deleted_at IS NULL
-			AND a.platform = $4
-			AND a.type = $5
-			AND a.credentials ->> 'cookie' = $6
-		RETURNING a.id
-		)
-		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
-		SELECT $7, updated.id, NULL, NULL FROM updated
-	`,
-		service.StatusError,
-		errorMsg,
-		id,
-		service.PlatformLeonardo,
-		service.AccountTypeOAuth,
-		expectedCookie,
-		service.SchedulerOutboxEventAccountChanged,
-	)
-	if err != nil {
-		return false, err
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	if rowsAffected == 0 {
-		return false, nil
-	}
-	r.syncSchedulerAccountSnapshotDetached(ctx, id)
-	return true, nil
-}
-
-// InvalidateLeonardoAccessTokenIfUnchanged drops access_token / expires_at from
-// a Leonardo OAuth account after the upstream rejected that exact JWT, so the
-// next request refreshes from the cookie instead of reusing a revoked token
-// whose exp has not passed. It is a CAS on the token value: a token a concurrent
-// request already refreshed is left alone. The cookie and every other field are
-// preserved, and the scheduler outbox insert shares the statement.
-func (r *accountRepository) InvalidateLeonardoAccessTokenIfUnchanged(
-	ctx context.Context,
-	id int64,
-	expectedAccessToken string,
-) (bool, error) {
-	if r == nil || r.sql == nil {
-		return false, errors.New("account repository SQL executor is not configured")
-	}
-	if strings.TrimSpace(expectedAccessToken) == "" {
-		return false, errors.New("leonardo token invalidation requires the rejected access_token")
-	}
-	result, err := r.sql.ExecContext(ctx, `
-		WITH updated AS (
-		UPDATE accounts AS a
-		SET credentials = a.credentials - 'access_token' - 'expires_at',
-			updated_at = NOW()
-		WHERE a.id = $1
-			AND a.deleted_at IS NULL
-			AND a.platform = $2
-			AND a.type = $3
-			AND btrim(a.credentials ->> 'access_token') = $4
-		RETURNING a.id
-		)
-		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
-		SELECT $5, updated.id, NULL, NULL FROM updated
-	`,
-		id,
-		service.PlatformLeonardo,
-		service.AccountTypeOAuth,
-		strings.TrimSpace(expectedAccessToken),
-		service.SchedulerOutboxEventAccountChanged,
-	)
-	if err != nil {
-		return false, err
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	if rowsAffected == 0 {
-		return false, nil
-	}
-	r.syncSchedulerAccountSnapshotDetached(ctx, id)
-	return true, nil
-}
-
-// UpdateLeonardoTokenIfCookieUnchanged merges a refreshed Leonardo JWT (and the
-// Better Auth-rotated cookie it was minted with) into a Leonardo OAuth account
-// only while the stored cookie still equals the one used for the exchange. Only
-// tokenFields are written (JSONB ||), so model_mapping edits made during the
-// round trip survive. The scheduler outbox insert shares the statement.
-func (r *accountRepository) UpdateLeonardoTokenIfCookieUnchanged(
-	ctx context.Context,
-	id int64,
-	expectedCookie string,
-	tokenFields map[string]any,
-) (bool, error) {
-	if r == nil || r.sql == nil {
-		return false, errors.New("account repository SQL executor is not configured")
-	}
-	if strings.TrimSpace(expectedCookie) == "" {
-		return false, errors.New("leonardo token update requires the cookie used for refresh")
-	}
-	fieldsJSON, err := json.Marshal(normalizeJSONMap(tokenFields))
-	if err != nil {
-		return false, err
-	}
-	result, err := r.sql.ExecContext(ctx, `
-		WITH updated AS (
-		UPDATE accounts AS a
-		SET credentials = COALESCE(a.credentials, '{}'::jsonb) || $1::jsonb,
-			updated_at = NOW()
-		WHERE a.id = $2
-			AND a.deleted_at IS NULL
-			AND a.platform = $3
-			AND a.type = $4
-			AND a.credentials ->> 'cookie' = $5
-		RETURNING a.id
-		)
-		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
-		SELECT $6, updated.id, NULL, NULL FROM updated
-	`,
-		string(fieldsJSON),
-		id,
-		service.PlatformLeonardo,
-		service.AccountTypeOAuth,
-		expectedCookie,
 		service.SchedulerOutboxEventAccountChanged,
 	)
 	if err != nil {
@@ -2876,6 +2732,49 @@ func (r *accountRepository) ClearModelRateLimits(ctx context.Context, id int64) 
 	return nil
 }
 
+// ClearModelRateLimit 删除 model_rate_limits 中指定的单个 scope。
+// 与 ClearModelRateLimits 的全量清除不同，这里只解封一个模型窗口，
+// 不会把其他模型或并发新写入的限流一起抹掉。
+func (r *accountRepository) ClearModelRateLimit(ctx context.Context, id int64, scope string) error {
+	if strings.TrimSpace(scope) == "" {
+		return nil
+	}
+	if scoped := r.accountTransactionScope(ctx); scoped != r {
+		return scoped.ClearModelRateLimit(ctx, id, scope)
+	}
+	client := clientFromContext(ctx, r.client)
+	result, err := client.ExecContext(
+		ctx,
+		`UPDATE accounts SET
+			extra = jsonb_set(
+				COALESCE(extra, '{}'::jsonb),
+				'{model_rate_limits}'::text[],
+				COALESCE(extra->'model_rate_limits', '{}'::jsonb) - $1::text,
+				true
+			),
+			updated_at = NOW()
+		WHERE id = $2 AND deleted_at IS NULL`,
+		strings.TrimSpace(scope),
+		id,
+	)
+	if err != nil {
+		return err
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrAccountNotFound
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue clear model rate limit scope failed: account=%d err=%v", id, err)
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return nil
+}
+
 func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error {
 	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
@@ -2900,8 +2799,11 @@ func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, s
 }
 
 func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error {
+	// Active five-hour quota reads must advance both bounds. Keeping the old
+	// start would charge the previous window against the new window's cost limit.
 	_, err := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
+		SetSessionWindowStart(end.Add(-5 * time.Hour)).
 		SetSessionWindowEnd(end).
 		Save(ctx)
 	if err != nil {

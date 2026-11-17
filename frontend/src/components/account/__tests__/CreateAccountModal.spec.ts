@@ -15,8 +15,6 @@ const {
   importCodexSessionMock,
   createOpenAICodexPATMock,
   generateKiroIDCAuthUrlMock,
-  generateAuthUrlMock,
-  exchangeCodeMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -26,8 +24,6 @@ const {
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
   generateKiroIDCAuthUrlMock: vi.fn(),
-  generateAuthUrlMock: vi.fn(),
-  exchangeCodeMock: vi.fn(),
   authIsSimpleMode: { value: true },
 }))
 
@@ -56,8 +52,6 @@ vi.mock('@/api/admin', () => ({
       checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
       createOpenAICodexPAT: createOpenAICodexPATMock,
-      generateAuthUrl: generateAuthUrlMock,
-      exchangeCode: exchangeCodeMock,
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -96,14 +90,12 @@ const OAuthAuthorizationFlowStub = defineComponent({
   name: 'OAuthAuthorizationFlow',
   props: {
     showManualOption: Boolean,
-    showMobileRefreshTokenOption: Boolean,
     showCodexSessionImportOption: Boolean,
     showAgentIdentityOption: Boolean,
     showCodexPatOption: Boolean,
     initialInputMethod: String,
   },
   data: () => ({ inputMethod: 'manual' }),
-  methods: { reset() {} },
   emits: ['generate-url', 'import-codex-session', 'import-codex-pat'],
   template: `
     <div>
@@ -168,7 +160,6 @@ const ModelWhitelistSelectorStub = defineComponent({
       default: () => [],
     },
     platform: String,
-    availableModels: { type: Array, default: undefined },
     syncCredentials: Object,
   },
   emits: ['update:modelValue', 'upstream-synced'],
@@ -270,11 +261,11 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   afterEach(() => vi.useRealTimers())
 
-  it('renders all 16 platforms in one grid with Kiro, Leonardo and Fish last', () => {
+  it('renders all 15 platforms in one grid with Kiro and Fish last', () => {
     const wrapper = mountModal()
     const platformSelector = wrapper.get('[data-tour="account-form-platform"]')
 
-    // 手机 3 列，sm 起 4 列（16 个平台正好 4 行）。
+    // 手机 3 列（15 个平台正好 5 行），sm 起 4 列。
     expect(platformSelector.classes()).toEqual(expect.arrayContaining(['grid-cols-3', 'sm:grid-cols-4']))
     expect(platformSelector.classes()).not.toContain('sm:grid-cols-5')
     expect(platformSelector.findAll('button').map((button) => button.text())).toEqual([
@@ -292,9 +283,27 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       'Command Code',
       'Cline',
       'Kiro',
-      'Leonardo',
       'Fish Audio',
     ])
+  })
+
+  it('can create a passthrough account with model filtering enabled', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('filtered passthrough')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('synthetic-key')
+    await wrapper.get('[data-testid="create-openai-passthrough-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="create-openai-passthrough-model-filter"]').setValue(true)
+    wrapper.getComponent(ModelWhitelistSelectorStub).vm.$emit('update:modelValue', ['qwen3.8-max'])
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload.extra.openai_passthrough).toBe(true)
+    expect(payload.extra.openai_passthrough_model_filter).toBe(true)
+    expect(payload.credentials.model_mapping).toEqual({ 'qwen3.8-max': 'qwen3.8-max' })
+    wrapper.unmount()
   })
 
   it('sets month and year expiry presets without submitting the account form', async () => {
@@ -752,13 +761,13 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     })
   })
 
-  it('keeps Kiro and Leonardo on the last row after the generic aggregators', () => {
+  it('keeps Kiro and Fish last after the generic aggregators', () => {
     const wrapper = mountModal()
     const labels = wrapper
       .get('[data-tour="account-form-platform"]')
       .findAll('button')
       .map((button) => button.text().trim())
-    expect(labels.slice(-6)).toEqual(['OpenCode', 'Command Code', 'Cline', 'Kiro', 'Leonardo', 'Fish Audio'])
+    expect(labels.slice(-5)).toEqual(['OpenCode', 'Command Code', 'Cline', 'Kiro', 'Fish Audio'])
     expect(labels.slice(5, 10)).toEqual(['TypeSafe / Jev', 'Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax'])
   })
 
@@ -1258,90 +1267,6 @@ describe('CreateAccountModal Vertex API key auth', () => {
     await selectButtonByText(wrapper, 'admin.accounts.vertexLabel')
     expect(wrapper.find('[data-testid="vertex-auth-mode-apikey"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="vertex-api-key-input"]').exists()).toBe(false)
-  })
-})
-
-describe('CreateAccountModal Leonardo accounts', () => {
-  beforeEach(() => {
-    authIsSimpleMode.value = true
-    createAccountMock.mockReset().mockResolvedValue({ id: 7, platform: 'leonardo', type: 'oauth' })
-  })
-
-  it('moves the cookie account to the credential step instead of asking for an API key', async () => {
-    const wrapper = mountModal()
-    await wrapper.get('[data-testid="platform-tab-leonardo"]').trigger('click')
-    await wrapper.get('form#create-account-form input[type="text"]').setValue('Leonardo cookie')
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-
-    expect(createAccountMock).not.toHaveBeenCalled()
-    await wrapper.get('[data-testid="leonardo-cookie-input"]').setValue('__Secure-better-auth.session_token=abc')
-    await wrapper.get('[data-testid="leonardo-create-account"]').trigger('click')
-    await flushPromises()
-
-    const payload = createAccountMock.mock.calls[0]?.[0]
-    expect(payload?.platform).toBe('leonardo')
-    expect(payload?.type).toBe('oauth')
-    expect(payload?.credentials).toMatchObject({ cookie: '__Secure-better-auth.session_token=abc' })
-  })
-
-  it('sends the Leonardo cookie credit unit price in extra', async () => {
-    const wrapper = mountModal()
-    await wrapper.get('[data-testid="platform-tab-leonardo"]').trigger('click')
-    await wrapper.get('form#create-account-form input[type="text"]').setValue('Leonardo cookie')
-    await wrapper.get('[data-testid="leonardo-credit-unit-price-usd"]').setValue('0.0012')
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-
-    await wrapper.get('[data-testid="leonardo-cookie-input"]').setValue('__Secure-better-auth.session_token=abc')
-    await wrapper.get('[data-testid="leonardo-create-account"]').trigger('click')
-    await flushPromises()
-
-    const payload = createAccountMock.mock.calls[0]?.[0]
-    expect(payload?.type).toBe('oauth')
-    expect(payload?.extra?.leonardo_credit_unit_price_usd).toBe(0.0012)
-    // 未设出图上限：写出中性值（不限 / 默认 2 倍）。
-    expect(payload?.extra).toMatchObject({
-      leonardo_max_quality: '',
-      leonardo_max_short_edge: 0,
-      leonardo_max_upscale_factor: 2
-    })
-  })
-
-  it('sends the Leonardo cookie image limits in extra', async () => {
-    const wrapper = mountModal()
-    await wrapper.get('[data-testid="platform-tab-leonardo"]').trigger('click')
-    await wrapper.get('form#create-account-form input[type="text"]').setValue('Leonardo cookie')
-    await wrapper.get('[data-testid="leonardo-max-short-edge"]').setValue('1024')
-    await wrapper.get('[data-testid="leonardo-max-upscale-factor"]').setValue('1.5')
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-
-    await wrapper.get('[data-testid="leonardo-cookie-input"]').setValue('__Secure-better-auth.session_token=abc')
-    await wrapper.get('[data-testid="leonardo-create-account"]').trigger('click')
-    await flushPromises()
-
-    const payload = createAccountMock.mock.calls[0]?.[0]
-    expect(payload?.extra).toMatchObject({ leonardo_max_short_edge: 1024, leonardo_max_upscale_factor: 1.5 })
-  })
-
-  it('creates the relay account in one step with base_url and api_key', async () => {
-    const wrapper = mountModal()
-    await wrapper.get('[data-testid="platform-tab-leonardo"]').trigger('click')
-    await wrapper.get('[data-testid="leonardo-account-type-relay"]').trigger('click')
-    await wrapper.get('form#create-account-form input[type="text"]').setValue('Leonardo relay')
-    await wrapper.get('[data-testid="leonardo-relay-base-url"]').setValue('https://relay.example.com')
-    await wrapper.get('[data-testid="leonardo-relay-api-key"]').setValue('sk-relay')
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-
-    const payload = createAccountMock.mock.calls[0]?.[0]
-    expect(payload?.platform).toBe('leonardo')
-    expect(payload?.type).toBe('apikey')
-    expect(payload?.credentials).toMatchObject({ base_url: 'https://relay.example.com', api_key: 'sk-relay' })
-    expect(wrapper.find('[data-testid="leonardo-credit-unit-price-usd"]').exists()).toBe(false)
-    expect(payload?.extra?.leonardo_credit_unit_price_usd).toBeUndefined()
-    expect(payload?.extra?.leonardo_max_short_edge).toBeUndefined()
   })
 })
 

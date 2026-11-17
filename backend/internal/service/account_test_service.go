@@ -160,10 +160,6 @@ type AccountTestService struct {
 	// grokWSDialer is optional; realtime account tests use the default OpenAI-style
 	// WS dialer when nil (supports proxy + coder/websocket handshake).
 	grokWSDialer openAIWSClientDialer
-	// leonardoTokenProvider 为 nil 时 Leonardo 测试路径按需构造本地 provider。
-	leonardoTokenProvider *LeonardoTokenProvider
-	// leonardoImageService 为 nil 时用测试专用的出图服务实例（单测注入用）。
-	leonardoImageService *LeonardoImageService
 }
 
 func (s *AccountTestService) SetSettingService(settingService *SettingService) {
@@ -175,13 +171,6 @@ func (s *AccountTestService) SetSettingService(settingService *SettingService) {
 func (s *AccountTestService) SetPluginManager(pluginManager *PluginManager) {
 	if s != nil {
 		s.pluginManager = pluginManager
-	}
-}
-
-// SetLeonardoTokenProvider 注入与网关共享 OAuthRefreshAPI 的 Leonardo token provider。
-func (s *AccountTestService) SetLeonardoTokenProvider(provider *LeonardoTokenProvider) {
-	if s != nil {
-		s.leonardoTokenProvider = provider
 	}
 }
 
@@ -438,10 +427,6 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 
 	if isKiroDirectModeAccount(account) {
 		return s.testKiroAccountConnection(c, account, modelID)
-	}
-
-	if account.Platform == PlatformLeonardo {
-		return s.testLeonardoAccountConnection(c, account, modelID, prompt)
 	}
 
 	if account.Platform == PlatformFish {
@@ -1083,6 +1068,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
 	}
 	payload := createOpenAITestPayload(upstreamTestModelID, isOAuth)
+	applyIQCheckResponsesPayload(ctx, payload)
 	payloadBytes, _ := json.Marshal(payload)
 
 	// Send test_start event once. A task-invalid Agent Identity response may
@@ -2325,6 +2311,9 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	c.Writer.Flush()
 
 	payload := createOpenAIChatCompletionsTestPayload(testModelID, prompt)
+	if options, ok := iqCheckProbeOptionsFromContext(ctx); ok && options.reasoningEffort != "" {
+		payload["reasoning_effort"] = options.reasoningEffort
+	}
 	payloadBytes, _ := json.Marshal(payload)
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
@@ -2792,7 +2781,7 @@ func (s *AccountTestService) buildGeminiOAuthRequest(ctx context.Context, accoun
 }
 
 func (s *AccountTestService) buildGeminiServiceAccountRequest(ctx context.Context, account *Account, modelID string, payload []byte) (*http.Request, error) {
-	fullURL, err := buildVertexGeminiAccountURL(account, modelID, "streamGenerateContent", true)
+	fullURL, err := buildVertexGeminiAccountURL(account, modelID, "streamGenerateContent", true, "")
 	if err != nil {
 		return nil, err
 	}
