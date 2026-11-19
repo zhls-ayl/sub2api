@@ -672,6 +672,11 @@ type ClaudeUsage struct {
 	// WebSearchRequests is the number of server-side web_search calls surfaced
 	// on this response. It is copied onto ForwardResult.WebSearchCalls for billing.
 	WebSearchRequests int `json:"-"`
+
+	cacheCreationInputTokensPresent     bool
+	cacheCreationInputTokensFromDetails bool
+	promptTotalTokens                   int
+	promptTotalPresent                  bool
 }
 
 // ForwardResult 转发结果
