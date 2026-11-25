@@ -10,6 +10,7 @@ import {
 const {
   createAccountMock,
   probeUpstreamBillingMock,
+  previewUpstreamGroup,
   syncUpstreamModelsMock,
   showWarningMock,
   importCodexSessionMock,
@@ -19,6 +20,7 @@ const {
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
   probeUpstreamBillingMock: vi.fn(),
+  previewUpstreamGroup: vi.fn(),
   syncUpstreamModelsMock: vi.fn(),
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock('@/api/admin', () => ({
     accounts: {
       create: createAccountMock,
       probeUpstreamBilling: probeUpstreamBillingMock,
+      previewUpstreamGroup,
       syncUpstreamModels: syncUpstreamModelsMock,
       checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
@@ -265,9 +268,9 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     const wrapper = mountModal()
     const platformSelector = wrapper.get('[data-tour="account-form-platform"]')
 
-    // 手机 3 列（15 个平台正好 5 行），sm 起 4 列。
-    expect(platformSelector.classes()).toEqual(expect.arrayContaining(['grid-cols-3', 'sm:grid-cols-4']))
-    expect(platformSelector.classes()).not.toContain('sm:grid-cols-5')
+    // 手机 3 列（15 个平台正好 5 行），sm 起 5 列（正好 3 行）。
+    expect(platformSelector.classes()).toEqual(expect.arrayContaining(['grid-cols-3', 'sm:grid-cols-5']))
+    expect(platformSelector.classes()).not.toContain('sm:grid-cols-4')
     expect(platformSelector.findAll('button').map((button) => button.text())).toEqual([
       'Anthropic',
       'OpenAI',
@@ -285,6 +288,45 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       'Kiro',
       'Fish Audio',
     ])
+  })
+
+  it('fills the name and notes from the unsaved API key and its adaptive Chat URL', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Kimi')
+    await wrapper.get('[data-testid="cn-adaptive-base-url-chat_completions"]').setValue('https://relay.example/v1')
+    await wrapper.get('form input[type="password"]').setValue('test-key')
+    previewUpstreamGroup.mockResolvedValue({ name: '标准组', notes: '共享账号' })
+
+    await selectButtonByText(wrapper, 'admin.accounts.upstreamBilling.syncGroup')
+    await flushPromises()
+
+    expect(previewUpstreamGroup).toHaveBeenCalledWith({
+      platform: 'kimi', base_url: 'https://relay.example/v1', api_key: 'test-key', proxy_id: null
+    }, expect.anything())
+    expect(wrapper.get<HTMLInputElement>('[data-tour="account-form-name"]').element.value).toBe('标准组')
+    expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe('共享账号')
+    expect(createAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('creates an API key account with group sync only after opt-in', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('[data-tour="account-form-name"]').setValue('local')
+    await wrapper.get('form input[type="password"]').setValue('synthetic-key')
+    const group = wrapper.get('[data-testid="upstream-billing-group-sync"]')
+    const probe = wrapper.get('[data-testid="upstream-billing-auto-probe"]')
+    expect(group.attributes('aria-checked')).toBe('false')
+    await probe.trigger('click')
+    await group.trigger('click')
+    expect(probe.attributes('aria-checked')).toBe('true')
+    await wrapper.get('#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock.mock.calls[0]?.[0]).toMatchObject({
+      upstream_billing_group_sync_enabled: true, upstream_billing_probe_enabled: true
+    })
+    wrapper.unmount()
   })
 
   it('can create a passthrough account with model filtering enabled', async () => {
